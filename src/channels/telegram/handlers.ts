@@ -4,6 +4,7 @@ import type { MessageHandler } from "../types.js";
 import { sendVoiceResponse } from "./voice.js";
 import { sendVideoNote } from "./video.js";
 import { transcribeSpeech } from "./stt.js";
+import { extractDocumentText } from "./documents.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -667,6 +668,44 @@ export function registerHandlers(
     } catch (err) {
       await ctx.reply("Не удалось обработать голосовое сообщение.");
       console.error("Voice processing error:", err instanceof Error ? err.message : err);
+    }
+  });
+
+  // Documents (PDF, DOCX, text files, code, etc.) — extract text and send to the LLM
+  bot.on("message:document", async (ctx) => {
+    const doc = ctx.message.document;
+    if (!doc) return;
+
+    const fileName = doc.file_name ?? "document";
+    try {
+      const file = await ctx.api.getFile(doc.file_id);
+      const fileUrl = `https://api.telegram.org/file/bot${bot.token}/${file.file_path}`;
+      const res = await fetch(fileUrl);
+      const buffer = Buffer.from(await res.arrayBuffer());
+
+      const stopTyping = startTyping(ctx);
+      const extracted = await extractDocumentText(buffer, fileName);
+      stopTyping();
+
+      const caption = ctx.message.caption?.trim();
+
+      if (!extracted) {
+        await ctx.reply(
+          `Не удалось прочитать файл «${escapeHtml(fileName)}». Поддерживаются PDF, DOCX и текстовые файлы (txt, md, csv, json, код).`,
+          { parse_mode: "HTML" },
+        );
+        return;
+      }
+
+      const truncatedNote = extracted.truncated
+        ? "\n\n[Примечание: документ обрезан, показана только часть содержимого.]"
+        : "";
+      const promptText = `Пользователь прислал документ «${fileName}»${caption ? ` с подписью: ${caption}` : ""}.\n\nСодержимое документа:\n\n${extracted.text}${truncatedNote}`;
+
+      await handleWithTyping(ctx, promptText);
+    } catch (err) {
+      await ctx.reply("Не удалось обработать документ.");
+      console.error("Document processing error:", err instanceof Error ? err.message : err);
     }
   });
 
