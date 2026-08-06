@@ -473,12 +473,14 @@ describe("parseBitrixEvent", () => {
     expect(e.fromUserId).toBe("17");
     expect(e.text).toBe("Привет");
     expect(e.applicationToken).toBe("tok123");
-    expect(e.fromBot).toBe(false);
+    expect(e.authorId).toBe("");
   });
 
-  it("marks messages sent by bots so we never answer ourselves", () => {
-    const e = parseBitrixEvent(body + "&data%5BPARAMS%5D%5BAUTHOR_ID%5D=0")!;
-    expect(e.fromBot).toBe(true);
+  it("reports the author id as sent, judging nothing", () => {
+    const human = parseBitrixEvent(body + "&data%5BPARAMS%5D%5BAUTHOR_ID%5D=17")!;
+    expect(human.authorId).toBe("17");
+    const zero = parseBitrixEvent(body + "&data%5BPARAMS%5D%5BAUTHOR_ID%5D=0")!;
+    expect(zero.authorId).toBe("0");
   });
 
   it("returns null on a body that is not an event", () => {
@@ -504,8 +506,13 @@ export interface BitrixEvent {
   fromUserId: string;
   text: string;
   applicationToken: string;
-  /** Bitrix reports AUTHOR_ID=0 for bot-sent messages. */
-  fromBot: boolean;
+  /**
+   * Raw AUTHOR_ID as sent by the portal. The parser reports it and judges
+   * nothing: deciding "this is our own bot talking" needs the bot's id, which
+   * only the channel knows. Guessing here would be an unverified assumption
+   * guarding the one thing that must not fail — the anti-loop check.
+   */
+  authorId: string;
 }
 
 /**
@@ -530,7 +537,7 @@ export function parseBitrixEvent(body: string): BitrixEvent | null {
     fromUserId: p("FROM_USER_ID"),
     text: p("MESSAGE"),
     applicationToken: params.get("auth[application_token]") ?? "",
-    fromBot: params.get("data[PARAMS][AUTHOR_ID]") === "0",
+    authorId: p("AUTHOR_ID"),
   };
 }
 ```
@@ -911,7 +918,7 @@ function body(opts: { token?: string; text?: string; author?: string } = {}) {
 function makeChannel() {
   const sent: Array<{ dialogId: string; text: string }> = [];
   const client = { sendMessage: async (dialogId: string, text: string) => { sent.push({ dialogId, text }); } };
-  const ch = new BitrixChannel({ applicationToken: "tok", client: client as never });
+  const ch = new BitrixChannel({ applicationToken: "tok", botId: "42", client: client as never });
   return { ch, sent };
 }
 
@@ -952,13 +959,31 @@ describe("BitrixChannel", () => {
     expect(sent).toEqual([]);
   });
 
-  it("ignores messages sent by bots", async () => {
+  it("never answers its own bot — the anti-loop guard", async () => {
+    const { ch, sent } = makeChannel();
+    ch.onMessage(async () => ({ text: "ответ" }));
+    // botId канала — "42": сообщение с таким автором написали мы сами
+    const res = ch.handleWebhook(body({ author: "42" }));
+    expect(res.status).toBe(200);
+    await ch.idle();
+    expect(sent).toEqual([]);
+  });
+
+  it("ignores portal system messages", async () => {
     const { ch, sent } = makeChannel();
     ch.onMessage(async () => ({ text: "ответ" }));
     const res = ch.handleWebhook(body({ author: "0" }));
     expect(res.status).toBe(200);
     await ch.idle();
     expect(sent).toEqual([]);
+  });
+
+  it("does answer a human whose author id is neither the bot nor zero", async () => {
+    const { ch, sent } = makeChannel();
+    ch.onMessage(async () => ({ text: "ответ" }));
+    ch.handleWebhook(body({ author: "17" }));
+    await ch.idle();
+    expect(sent).toEqual([{ dialogId: "chat42", text: "ответ" }]);
   });
 
   it("answers 400 on a body that is not an event", () => {
@@ -988,6 +1013,7 @@ import { DialogQueue } from "./queue.js";
 
 export interface BitrixChannelOptions {
   applicationToken?: string;
+  botId?: string;
   client?: BitrixClient;
 }
 
@@ -1006,10 +1032,12 @@ export class BitrixChannel implements Channel {
   private queue = new DialogQueue();
   private client: BitrixClient | null;
   private applicationToken: string | undefined;
+  private botId: string | undefined;
 
   constructor(options: BitrixChannelOptions = {}) {
     this.client = options.client ?? null;
     this.applicationToken = options.applicationToken;
+    this.botId = options.botId;
   }
 
   async start(config: Record<string, string>): Promise<void> {
@@ -1017,6 +1045,7 @@ export class BitrixChannel implements Channel {
       throw new Error("BitrixChannel: call onMessage() before start()");
     }
     this.applicationToken = this.applicationToken ?? config.application_token;
+    this.botId = this.botId ?? config.bot_id;
     this.client = this.client ?? new BitrixClient(config.webhook_url, config.bot_id);
   }
 
@@ -1051,7 +1080,14 @@ export class BitrixChannel implements Channel {
       return { status: 401 };
     }
 
-    if (event.fromBot) return { status: 200 };
+    // Anti-loop. We compare against the id we registered the bot with, not a
+    // guessed constant: this guard is the only thing standing between us and a
+    // bot answering itself forever, and it must not rest on an assumption.
+    if (this.botId && (event.authorId === this.botId || event.fromUserId === this.botId)) {
+      return { status: 200 };
+    }
+    // AUTHOR_ID=0 marks portal system messages — nothing to answer there either.
+    if (event.authorId === "0") return { status: 200 };
     if (!event.text) return { status: 200 };
 
     const handler = this.handler;
