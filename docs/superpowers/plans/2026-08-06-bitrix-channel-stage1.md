@@ -1112,34 +1112,41 @@ git commit -m "feat(bitrix): канал — 200 сразу, ответ в тот
 
 Добавить в `test/server.test.ts`:
 
-```typescript
-import { describe, it, expect, vi } from "vitest";
-import { createServer } from "../src/server.js";
+ВАЖНО: `createServer` слушает порт САМ (`src/server.ts:747`) — повторный
+`server.listen()` уронит тест с `ERR_SERVER_ALREADY_LISTEN`. Порт берётся из
+`handle.server.address()` сразу. Файл `test/server.test.ts` уже глушит конфиг
+через `BETSY_CONFIG_PATH` в `beforeAll` и закрывает сервер в `afterEach` —
+переиспользуйте существующие `handle` и хуки, новых не заводите.
 
+К импортам файла добавить `vi`:
+
+```typescript
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from "vitest";
+```
+
+Добавить блок:
+
+```typescript
 describe("POST /bitrix/", () => {
   it("passes the body to the channel and answers its status without a token", async () => {
     const handleWebhook = vi.fn().mockReturnValue({ status: 200 });
-    const { server } = createServer({ port: 0, passwordHash: "irrelevant", bitrix: { handleWebhook } });
-    await new Promise<void>((r) => server.listen(0, r));
-    const { port } = server.address() as { port: number };
+    handle = createServer({ port: 0, passwordHash: "irrelevant", bitrix: { handleWebhook } });
+    const addr = handle.server.address() as { port: number };
 
-    const res = await fetch(`http://127.0.0.1:${port}/bitrix/`, {
+    const res = await fetch(`http://localhost:${addr.port}/bitrix/`, {
       method: "POST",
       body: "event=ONIMBOTMESSAGEADD",
     });
 
     expect(res.status).toBe(200);
     expect(handleWebhook).toHaveBeenCalledWith("event=ONIMBOTMESSAGEADD");
-    server.close();
   });
 
   it("answers 404 when no bitrix channel is wired up", async () => {
-    const { server } = createServer({ port: 0 });
-    await new Promise<void>((r) => server.listen(0, r));
-    const { port } = server.address() as { port: number };
-    const res = await fetch(`http://127.0.0.1:${port}/bitrix/`, { method: "POST", body: "x" });
+    handle = createServer({ port: 0 });
+    const addr = handle.server.address() as { port: number };
+    const res = await fetch(`http://localhost:${addr.port}/bitrix/`, { method: "POST", body: "x" });
     expect(res.status).toBe(404);
-    server.close();
   });
 });
 ```
