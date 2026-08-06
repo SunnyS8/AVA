@@ -229,6 +229,9 @@ async function main() {
           return fs.existsSync(ref) ? ref : path.join(os.homedir(), ".betsy", "avatar.jpg");
         },
       };
+      // Set public mode BEFORE start() so the owner-only filter is not registered
+      const channelTelegramCfg = (config.channels as Record<string, any> | undefined)?.telegram;
+      telegram.allowAll = channelTelegramCfg?.public === true || channelTelegramCfg?.enabled_public === true;
       await telegram.start({
         token: config.telegram.token,
         owner_chat_id: config.telegram.owner_id?.toString() ?? "",
@@ -247,9 +250,6 @@ async function main() {
 
   if (telegram) {
     channels.set("telegram", telegram);
-    // Public mode — allow anyone to chat
-    const channelTelegram = (config.channels as Record<string, any> | undefined)?.telegram;
-    telegram.allowAll = channelTelegram?.public === true || channelTelegram?.enabled_public === true;
     // Download bot avatar as fallback for video circles if no reference photo yet
     const refPath = path.join(os.homedir(), ".betsy", "reference.jpg");
     const avatarPath = path.join(os.homedir(), ".betsy", "avatar.jpg");
