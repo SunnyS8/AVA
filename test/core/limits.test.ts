@@ -43,4 +43,16 @@ describe("RateLimiter", () => {
     }
     expect(rl.check("other", false).allowed).toBe(true);
   });
+
+  it("reports an honest wait for the portal-wide daily cap", () => {
+    let t = 0;
+    const rl = new RateLimiter(1000, 1, () => t);
+    rl.check("a", false);              // единственный слот занят в момент 0
+    t = 2 * 60 * 60 * 1000;            // прошло два часа
+    const v = rl.check("b", false);
+    expect(v.allowed).toBe(false);
+    expect(v.reason).toBe("per_day_total");
+    // слот освободится через 22 часа, а не «через час»
+    expect(v.retryAfterMin).toBeGreaterThan(20 * 60);
+  });
 });

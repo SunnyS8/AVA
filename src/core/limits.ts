@@ -31,7 +31,13 @@ export class RateLimiter {
 
     this.portal = this.portal.filter((ts) => t - ts < DAY_MS);
     if (this.portal.length >= this.perDayTotal) {
-      return { allowed: false, reason: "per_day_total", retryAfterMin: 60 };
+      const oldest = this.portal[0];
+      const waitMs = DAY_MS - (t - oldest);
+      return {
+        allowed: false,
+        reason: "per_day_total",
+        retryAfterMin: Math.max(1, Math.ceil(waitMs / 60000)),
+      };
     }
 
     const mine = (this.perUser.get(userId) ?? []).filter((ts) => t - ts < HOUR_MS);
