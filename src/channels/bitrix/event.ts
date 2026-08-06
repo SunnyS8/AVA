@@ -4,8 +4,13 @@ export interface BitrixEvent {
   fromUserId: string;
   text: string;
   applicationToken: string;
-  /** Bitrix reports AUTHOR_ID=0 for bot-sent messages. */
-  fromBot: boolean;
+  /**
+   * Raw AUTHOR_ID as sent by the portal. The parser reports it and judges
+   * nothing: deciding "this is our own bot talking" needs the bot's id, which
+   * only the channel knows. Guessing here would be an unverified assumption
+   * guarding the one thing that must not fail — the anti-loop check.
+   */
+  authorId: string;
 }
 
 /**
@@ -30,6 +35,6 @@ export function parseBitrixEvent(body: string): BitrixEvent | null {
     fromUserId: p("FROM_USER_ID"),
     text: p("MESSAGE"),
     applicationToken: params.get("auth[application_token]") ?? "",
-    fromBot: params.get("data[PARAMS][AUTHOR_ID]") === "0",
+    authorId: p("AUTHOR_ID"),
   };
 }

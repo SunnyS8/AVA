@@ -17,12 +17,14 @@ describe("parseBitrixEvent", () => {
     expect(e.fromUserId).toBe("17");
     expect(e.text).toBe("Привет");
     expect(e.applicationToken).toBe("tok123");
-    expect(e.fromBot).toBe(false);
+    expect(e.authorId).toBe("");
   });
 
-  it("marks messages sent by bots so we never answer ourselves", () => {
-    const e = parseBitrixEvent(body + "&data%5BPARAMS%5D%5BAUTHOR_ID%5D=0")!;
-    expect(e.fromBot).toBe(true);
+  it("reports the author id as sent, judging nothing", () => {
+    const human = parseBitrixEvent(body + "&data%5BPARAMS%5D%5BAUTHOR_ID%5D=17")!;
+    expect(human.authorId).toBe("17");
+    const zero = parseBitrixEvent(body + "&data%5BPARAMS%5D%5BAUTHOR_ID%5D=0")!;
+    expect(zero.authorId).toBe("0");
   });
 
   it("returns null on a body that is not an event", () => {
