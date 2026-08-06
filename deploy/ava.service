@@ -1,0 +1,42 @@
+[Unit]
+Description=Ava — AI-компаньон (движок Betsy)
+Documentation=https://github.com/SunnyS8/AVA
+After=network-online.target
+Wants=network-online.target
+# Не уходить в бесконечный быстрый рестарт при поломанном конфиге.
+# ВАЖНО: эти два ключа — уровня [Unit]; в [Service] systemd их игнорирует.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ava
+Group=ava
+WorkingDirectory=/opt/ava
+ExecStart=/usr/bin/node /opt/ava/dist/index.js
+Environment=NODE_ENV=production
+# Состояние (config.yaml, betsy.db, skills) живёт в /home/ava/.betsy
+Environment=HOME=/home/ava
+
+Restart=always
+RestartSec=5
+# Куда Playwright кладёт Chromium (ставится опцией --with-browser).
+# Безвредно, если браузер не установлен.
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/ava/.playwright
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ava
+
+# Ограничения: сервису нужны только свой каталог состояния и /opt/ava на чтение
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=/home/ava
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
