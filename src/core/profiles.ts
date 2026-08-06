@@ -38,12 +38,25 @@ export function resolveProfile(
   userId: string,
   cfg: ProfilesConfig | undefined,
 ): UserProfile {
-  if (!cfg) {
-    return { userId, role: "employee", mode: "default", voice: false, video: false, unlimited: false };
-  }
+  const denied: UserProfile = {
+    userId,
+    role: "employee",
+    mode: "default",
+    voice: false,
+    video: false,
+    unlimited: false,
+  };
+
+  // No config, or no caller identity at all — grant nothing. The owner check
+  // below compares strings, and `undefined === undefined` would otherwise hand
+  // out the owner role to a caller we could not even identify.
+  if (!cfg || !userId) return denied;
+
+  const isOwner =
+    typeof cfg.owner_id === "string" && cfg.owner_id !== "" && cfg.owner_id === userId;
 
   const role: Role =
-    cfg.owner_id === userId ? "owner"
+    isOwner ? "owner"
     : cfg.analyst_ids.includes(userId) ? "analyst"
     : cfg.marketing_head_ids.includes(userId) ? "marketing_head"
     : cfg.marketing_specialist_ids.includes(userId) ? "marketing_specialist"

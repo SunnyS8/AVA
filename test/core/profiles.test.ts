@@ -46,5 +46,27 @@ describe("resolveProfile", () => {
     expect(p.voice).toBe(false);
     expect(p.video).toBe(false);
     expect(p.unlimited).toBe(false);
+    expect(p.mode).toBe("default");
+  });
+
+  it("takes the first matching role when lists overlap", () => {
+    const overlap = { ...cfg, analyst_ids: ["6"], marketing_head_ids: ["6"] };
+    expect(resolveProfile("6", overlap).role).toBe("analyst");
+  });
+
+  it("grants nothing to an empty user id", () => {
+    const p = resolveProfile("", cfg);
+    expect(p.role).toBe("employee");
+    expect(p.unlimited).toBe(false);
+    expect(p.voice).toBe(false);
+  });
+
+  it("does not hand out the owner role when owner_id is not configured", () => {
+    // owner_id отсутствует, ID звонящего тоже пуст — раньше undefined === undefined
+    // давало роль собственника со снятыми лимитами
+    const noOwner = { ...cfg, owner_id: undefined };
+    const p = resolveProfile(undefined as unknown as string, noOwner);
+    expect(p.role).toBe("employee");
+    expect(p.unlimited).toBe(false);
   });
 });
