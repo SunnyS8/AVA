@@ -83,6 +83,26 @@ const configSchema = z.object({
     owner_id: z.number().optional(),
   }).optional(),
 
+  bitrix: z.object({
+    webhook_url: z.string(),
+    application_token: z.string(),
+    bot_id: z.string().optional(),
+  }).optional(),
+
+  profiles: z.object({
+    owner_id: z.string().optional(),
+    analyst_ids: z.array(z.string()).default([]),
+    marketing_head_ids: z.array(z.string()).default([]),
+    marketing_specialist_ids: z.array(z.string()).default([]),
+    voice_ids: z.array(z.string()).default([]),
+    video_ids: z.array(z.string()).default([]),
+    modes: z.record(z.string(), z.string()).default({}),
+    limits: z.object({
+      per_hour: z.number().default(15),
+      per_day_total: z.number().default(300),
+    }).default({}),
+  }).optional(),
+
   channels: z.record(z.string(), z.any()).optional(),
 
   memory: z.object({
@@ -201,15 +221,13 @@ function normalizeConfig(raw: Record<string, unknown>): Record<string, unknown> 
   return out;
 }
 
-export function loadConfig(customPath?: string): BetsyConfig | null {
-  const filePath = getConfigPath(customPath);
-  if (!fs.existsSync(filePath)) return null;
-
-  const raw = fs.readFileSync(filePath, "utf-8");
-  const parsed = parseYaml(raw);
-  if (!parsed || typeof parsed !== "object") return null;
-
-  const normalized = normalizeConfig(parsed as Record<string, unknown>);
+/**
+ * Normalize, validate (with best-effort recovery from invalid fields) and
+ * return a config object. Shared by loadConfig and any caller that already
+ * has a parsed config object in hand (e.g. tests).
+ */
+export function parseConfig(raw: Record<string, unknown>): BetsyConfig {
+  const normalized = normalizeConfig(raw);
 
   const result = configSchema.safeParse(normalized);
   if (!result.success) {
@@ -225,6 +243,17 @@ export function loadConfig(customPath?: string): BetsyConfig | null {
     return configSchema.parse(normalized);
   }
   return result.data;
+}
+
+export function loadConfig(customPath?: string): BetsyConfig | null {
+  const filePath = getConfigPath(customPath);
+  if (!fs.existsSync(filePath)) return null;
+
+  const raw = fs.readFileSync(filePath, "utf-8");
+  const parsed = parseYaml(raw);
+  if (!parsed || typeof parsed !== "object") return null;
+
+  return parseConfig(parsed as Record<string, unknown>);
 }
 
 export function saveConfig(config: BetsyConfig, customPath?: string): void {

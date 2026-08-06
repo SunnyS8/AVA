@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
-import { loadConfig, getPersonality, getLLMApiKey, getAgentName } from "../../src/core/config.js";
+import { loadConfig, getPersonality, getLLMApiKey, getAgentName, parseConfig } from "../../src/core/config.js";
 
 const TEST_DIR = path.join(os.tmpdir(), `betsy-config-test-${Date.now()}`);
 
@@ -112,5 +112,30 @@ fallback_models:
     const llm = config!.llm as any;
     expect(llm.fallback_models).toEqual(["free/model-1"]);
     fs.unlinkSync(tmpPath);
+  });
+});
+
+describe("bitrix and profiles config", () => {
+  it("accepts a bitrix section", () => {
+    const cfg = parseConfig({
+      agent: { name: "Ава" },
+      bitrix: { webhook_url: "https://p.bitrix24.ru/rest/1/abc/", application_token: "tok" },
+    });
+    expect(cfg.bitrix?.webhook_url).toContain("/rest/");
+    expect(cfg.bitrix?.application_token).toBe("tok");
+  });
+
+  it("fills profile defaults so missing lists mean 'nobody'", () => {
+    const cfg = parseConfig({ agent: { name: "Ава" }, profiles: {} });
+    expect(cfg.profiles?.voice_ids).toEqual([]);
+    expect(cfg.profiles?.video_ids).toEqual([]);
+    expect(cfg.profiles?.limits.per_hour).toBe(15);
+    expect(cfg.profiles?.limits.per_day_total).toBe(300);
+  });
+
+  it("works without either section", () => {
+    const cfg = parseConfig({ agent: { name: "Ава" } });
+    expect(cfg.bitrix).toBeUndefined();
+    expect(cfg.profiles).toBeUndefined();
   });
 });
