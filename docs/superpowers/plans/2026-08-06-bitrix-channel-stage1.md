@@ -679,23 +679,26 @@ describe("clip", () => {
 });
 
 describe("BitrixClient", () => {
-  it("posts the message to the webhook", async () => {
+  it("sends as the bot, not as the webhook owner", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => "{}" });
-    const c = new BitrixClient("https://p.bitrix24.ru/rest/1/secret/", fetchMock as unknown as typeof fetch);
+    const c = new BitrixClient("https://p.bitrix24.ru/rest/6/secret/", "42", fetchMock as unknown as typeof fetch);
     await c.sendMessage("chat42", "привет");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://p.bitrix24.ru/rest/1/secret/im.message.add.json");
+    // imbot.message.add — сообщение от имени бота. im.message.add отправил бы
+    // его от имени владельца вебхука, и сотрудники увидели бы живого человека.
+    expect(url).toBe("https://p.bitrix24.ru/rest/6/secret/imbot.message.add.json");
     expect(init.method).toBe("POST");
     const sent = JSON.parse(init.body as string);
+    expect(sent.BOT_ID).toBe("42");
     expect(sent.DIALOG_ID).toBe("chat42");
     expect(sent.MESSAGE).toBe("привет");
   });
 
   it("clips an over-long message before sending", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => "{}" });
-    const c = new BitrixClient("https://p.bitrix24.ru/rest/1/secret/", fetchMock as unknown as typeof fetch);
+    const c = new BitrixClient("https://p.bitrix24.ru/rest/6/secret/", "42", fetchMock as unknown as typeof fetch);
     await c.sendMessage("chat1", "x".repeat(9000));
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(sent.MESSAGE.length).toBeLessThanOrEqual(8001);
@@ -703,7 +706,7 @@ describe("BitrixClient", () => {
 
   it("throws with a message that does NOT contain the webhook secret", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => "boom" });
-    const c = new BitrixClient("https://p.bitrix24.ru/rest/1/supersecret/", fetchMock as unknown as typeof fetch);
+    const c = new BitrixClient("https://p.bitrix24.ru/rest/6/supersecret/", "42", fetchMock as unknown as typeof fetch);
     await expect(c.sendMessage("chat1", "hi")).rejects.toThrow(/500/);
     await expect(c.sendMessage("chat1", "hi")).rejects.not.toThrow(/supersecret/);
   });
@@ -743,20 +746,21 @@ export function clip(text: string, limit: number = MAX_MESSAGE_LEN): string {
 export class BitrixClient {
   constructor(
     private webhookUrl: string,
+    private botId: string,
     private fetchImpl: typeof fetch = fetch,
   ) {}
 
   async sendMessage(dialogId: string, text: string): Promise<void> {
     const base = this.webhookUrl.endsWith("/") ? this.webhookUrl : `${this.webhookUrl}/`;
-    const res = await this.fetchImpl(`${base}im.message.add.json`, {
+    const res = await this.fetchImpl(`${base}imbot.message.add.json`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ DIALOG_ID: dialogId, MESSAGE: clip(text) }),
+      body: JSON.stringify({ BOT_ID: this.botId, DIALOG_ID: dialogId, MESSAGE: clip(text) }),
     });
 
     if (!res.ok) {
       // Deliberately no URL in the message — it carries the secret.
-      throw new Error(`Bitrix im.message.add failed: HTTP ${res.status}`);
+      throw new Error(`Bitrix imbot.message.add failed: HTTP ${res.status}`);
     }
   }
 }
@@ -996,7 +1000,7 @@ export interface BitrixChannelOptions {
  */
 export class BitrixChannel implements Channel {
   name = "bitrix";
-  requiredConfig = ["webhook_url", "application_token"];
+  requiredConfig = ["webhook_url", "application_token", "bot_id"];
 
   private handler: MessageHandler | null = null;
   private queue = new DialogQueue();
@@ -1013,7 +1017,7 @@ export class BitrixChannel implements Channel {
       throw new Error("BitrixChannel: call onMessage() before start()");
     }
     this.applicationToken = this.applicationToken ?? config.application_token;
-    this.client = this.client ?? new BitrixClient(config.webhook_url);
+    this.client = this.client ?? new BitrixClient(config.webhook_url, config.bot_id);
   }
 
   async stop(): Promise<void> {
@@ -1315,7 +1319,9 @@ export function buildBitrixHandler(deps: BitrixHandlerDeps): MessageHandler {
 
 ```typescript
   let bitrix: BitrixChannel | null = null;
-  if (config.bitrix?.webhook_url && config.bitrix?.application_token) {
+  // bot_id появляется только после регистрации бота (задача 12): без него
+  // отправлять от имени Авы нечем, поэтому канал молча не поднимается.
+  if (config.bitrix?.webhook_url && config.bitrix?.application_token && config.bitrix?.bot_id) {
     const limiter = new RateLimiter(
       config.profiles?.limits.per_hour ?? 15,
       config.profiles?.limits.per_day_total ?? 300,
@@ -1337,6 +1343,7 @@ export function buildBitrixHandler(deps: BitrixHandlerDeps): MessageHandler {
     await bitrix.start({
       webhook_url: config.bitrix.webhook_url,
       application_token: config.bitrix.application_token,
+      bot_id: config.bitrix.bot_id,
     });
     channels.set("bitrix", bitrix);
     console.log("✅ Канал Битрикс запущен");
@@ -1508,13 +1515,125 @@ git commit -m "feat(deploy): публичный HTTPS для событий Би
 
 ---
 
+## Task 12: Регистрация бота в портале
+
+**Files:**
+- Create: `scripts/register-bitrix-bot.mjs`
+
+Выполняется ОДИН раз, ПОСЛЕ задачи 11: `imbot.register` требует рабочие
+публичные URL обработчиков, до поднятия HTTPS вызов бессмысленен.
+
+Замер портала `importks.bitrix24.ru` (06.08.2026): чат-ботов 2.0
+(`imbot.v2.*`) НЕТ, доступен только классический API — 37 методов, включая
+`imbot.register`. Опрос событий (`event.offline.get`) для ботов не работает:
+обработчики обязательны. Права вебхука: `department, im, imbot, user`.
+
+**Interfaces:**
+- Consumes: вебхук из `~/.betsy/config.yaml` (`bitrix.webhook_url`)
+- Produces: `BOT_ID`, который вписывается в `bitrix.bot_id`
+
+- [ ] **Step 1: Написать скрипт регистрации**
+
+Создать `scripts/register-bitrix-bot.mjs`:
+
+```javascript
+// Регистрирует Аву как чат-бота портала. Запускать ОДИН раз, после того как
+// поднят публичный HTTPS (deploy/bitrix-setup.sh).
+//
+//   node scripts/register-bitrix-bot.mjs <webhook_url>
+//
+// Вебхук передаётся аргументом и НЕ хранится в скрипте.
+
+const webhook = process.argv[2];
+if (!webhook) {
+  console.error("нужен URL вебхука аргументом");
+  process.exit(1);
+}
+const base = webhook.endsWith("/") ? webhook : webhook + "/";
+const HANDLER = "https://83.222.26.241.sslip.io/bitrix/";
+
+const body = {
+  CODE: "ava",
+  TYPE: "B",
+  EVENT_MESSAGE_ADD: HANDLER,
+  EVENT_WELCOME_MESSAGE: HANDLER,
+  EVENT_BOT_DELETE: HANDLER,
+  PROPERTIES: {
+    NAME: "Ава",
+    COLOR: "AQUA",
+    EMAIL: "",
+    PERSONAL_BIRTHDAY: "",
+    WORK_POSITION: "AI-компаньон",
+  },
+};
+
+const res = await fetch(`${base}imbot.register.json`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+const data = await res.json();
+
+if (!res.ok || data.error) {
+  console.error(`регистрация не прошла: HTTP ${res.status} ${data.error ?? ""} ${data.error_description ?? ""}`);
+  process.exit(1);
+}
+
+console.log("BOT_ID =", data.result);
+console.log("Впишите его в ~/.betsy/config.yaml как bitrix.bot_id и перезапустите службу:");
+console.log("  systemctl restart ava");
+```
+
+- [ ] **Step 2: Проверить синтаксис**
+
+Run: `node --check scripts/register-bitrix-bot.mjs && echo OK`
+Expected: `OK`
+
+- [ ] **Step 3: Выполнить регистрацию**
+
+Выполнить на машине владельца, подставив вебхук из
+`Агент\Ава\вебхух битрикс ава.txt`:
+
+```bash
+node scripts/register-bitrix-bot.mjs "<webhook_url>"
+```
+
+Expected: строка `BOT_ID = <число>`.
+
+Если пришло `ERROR_METHOD_NOT_FOUND` — у вебхука нет права `imbot`.
+Если `WRONG_HANDLER_URL` — публичный адрес не отвечает: вернуться к задаче 11.
+
+- [ ] **Step 4: Вписать BOT_ID и перезапустить**
+
+В `~/.betsy/config.yaml` на сервере, раздел `bitrix`:
+
+```yaml
+bitrix:
+  webhook_url: "…"
+  application_token: "…"
+  bot_id: "<полученное число>"
+```
+
+Затем `systemctl restart ava` и проверить журнал:
+`journalctl -u ava -n 20` — ожидается строка `✅ Канал Битрикс запущен`.
+
+- [ ] **Step 5: Коммит**
+
+```bash
+git add scripts/register-bitrix-bot.mjs
+git commit -m "feat(bitrix): скрипт регистрации бота в портале"
+```
+
+---
+
 ## Сдача этапа
 
 - [ ] `npm run typecheck` — 0
 - [ ] `npm test` — все зелёные, новых падений нет
 - [ ] `npm run build:all` — 0
 - [ ] Пересобрать пакет и обновить сервер (`deploy/install.sh`)
-- [ ] Владелец создаёт локальное приложение в портале с обработчиком `https://83.222.26.241.sslip.io/bitrix/` и даёт входящий вебхук; вписать их в `~/.betsy/config.yaml`
+- [ ] Вебхук с правом `imbot` вписан в `~/.betsy/config.yaml` (уже создан владельцем 06.08.2026, права `department, im, imbot, user`)
+- [ ] Бот зарегистрирован (задача 12), `bot_id` вписан, служба перезапущена
 - [ ] **Живая проверка:** сотрудник пишет Аве в портале и получает ответ; человек не из списка `voice_ids` голосового ответа не получает
 - [ ] Отметить результат в `docs/superpowers/plans/` и обновить спеку, если живая проверка что-то опровергла
 
