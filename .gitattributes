@@ -1,0 +1,9 @@
+# Скрипты и юниты исполняются на Linux: перевод строки ТОЛЬКО LF.
+# Без этого git на Windows выдаёт при checkout CRLF, и bash на сервере
+# падает на «\r: command not found».
+*.sh        text eol=lf
+*.service   text eol=lf
+
+# YAML-конфиги читаются на сервере — тоже держим LF
+*.yaml      text eol=lf
+*.yml       text eol=lf
