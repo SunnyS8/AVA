@@ -18,6 +18,10 @@ gcp-sa*.json
 # Отслеживаемых .txt в репозитории нет, так что правило ничего не скрывает.
 /*.txt
 
+# Публичный ключ конкретной машины кладётся в пакет установки на этапе сборки.
+# В репозиторий не идёт: иначе 6.sh молча выдал бы доступ к ЧУЖОМУ серверу.
+deploy/key.pub
+
 # Local helpers and temp brainstorm sessions — never commit
 .superpowers/
 scripts/__pycache__/
