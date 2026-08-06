@@ -14,6 +14,10 @@ betsy-*.json
 gcp-sa*.json
 *service-account*.json
 
+# Заметки с доступами в корне (txt с ключами/паролями) — НИКОГДА не коммитим.
+# Отслеживаемых .txt в репозитории нет, так что правило ничего не скрывает.
+/*.txt
+
 # Local helpers and temp brainstorm sessions — never commit
 .superpowers/
 scripts/__pycache__/
