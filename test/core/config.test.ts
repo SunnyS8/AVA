@@ -138,4 +138,20 @@ describe("bitrix and profiles config", () => {
     expect(cfg.bitrix).toBeUndefined();
     expect(cfg.profiles).toBeUndefined();
   });
+
+  it("does not let a malformed bitrix section through untouched", () => {
+    // Схема ловит неверный тип. Восстановление удаляет поле, секция остаётся
+    // без обязательного webhook_url — и разбор падает. Это осознанно: конфиг с
+    // опечаткой роняет запуск ГРОМКО. Молча выкинуть секцию было бы хуже —
+    // Ава поднялась бы без Битрикса, сотрудники писали бы в пустоту, и никто
+    // бы об этом не узнал.
+    // Без секции bitrix в схеме passthrough пропустил бы мусор и исключения
+    // не было бы — поэтому тест действительно проверяет схему.
+    expect(() =>
+      parseConfig({
+        agent: { name: "Ава" },
+        bitrix: { webhook_url: 123, application_token: "tok" },
+      }),
+    ).toThrow();
+  });
 });
