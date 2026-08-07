@@ -1,4 +1,5 @@
 import { buildPersonalityPrompt } from "./personality.js";
+import type { AccessLevel } from "./access.js";
 
 export interface PromptConfig {
   name: string;
@@ -14,6 +15,42 @@ export interface PromptConfig {
     addressAs?: string;
     facts?: string[];
   };
+}
+
+/**
+ * One entry per tool the system prompt can brag about. Kept out of the
+ * template literal so the "умения" sentence can be built from whichever
+ * tools are actually available in this conversation, instead of a constant
+ * that lists everything regardless of what got registered (задача 4) or
+ * what this caller is allowed to touch (access.ts).
+ */
+const TOOL_CAPABILITIES: ReadonlyArray<{ tool: string; phrase: string }> = [
+  { tool: "shell", phrase: "выполнять команды (shell)" },
+  { tool: "send_file", phrase: "отправлять файлы в чат (send_file)" },
+  { tool: "files", phrase: "работать с файлами (files)" },
+  { tool: "http", phrase: "делать запросы к сайтам (http)" },
+  { tool: "browser", phrase: "открывать сайты и искать в интернете (browser)" },
+  { tool: "memory", phrase: "запоминать важное (memory)" },
+  { tool: "scheduler", phrase: "ставить напоминания (scheduler)" },
+  { tool: "self_config", phrase: "настраивать себя (self_config)" },
+  { tool: "ssh", phrase: "подключаться к серверам (ssh)" },
+  { tool: "selfie", phrase: "отправлять селфи (selfie)" },
+  { tool: "video_message", phrase: "отправлять видео-кружочки (video_message)" },
+];
+
+// Legacy fallback: callers that don't yet pass availableToolNames (none left
+// in this codebase after задача "промпт врёт о ssh", but the parameter is
+// optional so nothing outside breaks) get the old blanket behaviour — every
+// capability mentioned, same text as before this list became dynamic.
+const ALL_CAPABILITY_TOOL_NAMES = TOOL_CAPABILITIES.map((c) => c.tool);
+
+function buildToolsCapabilitySentence(availableToolNames: string[] | undefined): string {
+  const available = new Set(availableToolNames ?? ALL_CAPABILITY_TOOL_NAMES);
+  const phrases = TOOL_CAPABILITIES.filter((c) => available.has(c.tool)).map((c) => c.phrase);
+  if (phrases.length === 0) {
+    return "Сейчас у тебя нет активных инструментов — отвечай обычным разговором.";
+  }
+  return `Ты умеешь: ${phrases.join(", ")}.`;
 }
 
 function buildGenderBlock(gender: "female" | "male"): string {
@@ -40,6 +77,14 @@ export function buildSystemPrompt(
   userMessage?: string,
   chatId?: string,
   connectedServices?: string[],
+  access: AccessLevel = "restricted",
+  // Real, already-filtered (by registration in src/index.ts AND by access
+  // level in access.ts) list of tool names this conversation can actually
+  // call. Optional only so old call sites don't break; engine.ts — the one
+  // caller that matters — always passes it. Left undefined, the prompt
+  // falls back to naming every capability, which is what let the "ssh"
+  // promise survive a disabled ssh tool in the first place.
+  availableToolNames?: string[],
 ): string {
   const name = config.name || "Betsy";
   const gender = config.gender ?? "female";
@@ -83,8 +128,8 @@ ${genderBlock}
     prompt += `\n\n## Личность\n\n${personalityParts.join("\n")}`;
   }
 
-  // Owner info
-  if (config.owner) {
+  // Owner info — never leaked to a restricted (non-owner) conversation.
+  if (config.owner && access !== "restricted") {
     const o = config.owner;
     const parts: string[] = [];
     if (o.name) {
@@ -131,7 +176,7 @@ ${genderBlock}
 
 КРИТИЧЕСКОЕ ПРАВИЛО: У тебя есть инструмент video_message, который УМЕЕТ отправлять видео-кружочки (лип-синк видео, где двигаются губы). Когда просят «видео-кружочек», «кружок», «видео-сообщение», «отправь видео», «сними себе видео» — ТЫ ОБЯЗАНА НЕМЕДЛЕННО вызвать video_message. НИКОГДА не говори, что не умеешь или что это невозможно. Просто вызывай video_message и отправляй видео.
 
-Ты умеешь многое — выполнять команды (shell), отправлять файлы в чат (send_file), работать с файлами (files), открывать сайты и искать в интернете (browser, http), запоминать важное (memory), ставить напоминания (scheduler), настраивать себя (self_config), подключаться к серверам (ssh), отправлять селфи (selfie), отправлять видео-кружочки (video_message). Когда просят прислать видео-кружок, видео-сообщение, «кружочек», «отправь видео» — используй video_message с текстом, который нужно озвучить. Когда просят фото/селфи — используй selfie. Для получения контента сайтов сначала пробуй http (он быстрее). Если http вернул ошибку (403, 503, пустой ответ, капча) — повтори запрос через browser (action: get_text). browser также используй для интерактивных действий (клик, заполнение форм, скриншоты). Scheduler: schedule_type="at" + at="+5m" для одноразовых, schedule_type="every" + every="30m" для интервалов, schedule_type="cron" + cron_expression="0 20 * * *" для расписаний. Когда просят "напомни", "напиши через", "каждый день" — используй scheduler.
+${buildToolsCapabilitySentence(availableToolNames)} Когда просят прислать видео-кружок, видео-сообщение, «кружочек», «отправь видео» — используй video_message с текстом, который нужно озвучить. Когда просят фото/селфи — используй selfie. Для получения контента сайтов сначала пробуй http (он быстрее). Если http вернул ошибку (403, 503, пустой ответ, капча) — повтори запрос через browser (action: get_text). browser также используй для интерактивных действий (клик, заполнение форм, скриншоты). Scheduler: schedule_type="at" + at="+5m" для одноразовых, schedule_type="every" + every="30m" для интервалов, schedule_type="cron" + cron_expression="0 20 * * *" для расписаний. Когда просят "напомни", "напиши через", "каждый день" — используй scheduler.
 
 ВАЖНО: Когда скачиваешь файл (видео, аудио, документ) — ВСЕГДА отправляй его в чат через send_file. Не просто сообщай путь к файлу, а отправляй сам файл.
 

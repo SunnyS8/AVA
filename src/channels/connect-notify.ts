@@ -1,16 +1,21 @@
 import type { Channel } from "./types.js";
 import type { ServiceDefinition } from "../services/catalog.js";
 import type { OnConnectedCallback } from "../core/tools/connect-service.js";
+import type { AccessLevel } from "../core/access.js";
 
 /** Minimal shape used from Engine — avoids importing the full class just for typing. */
 export interface EngineLike {
-  process(msg: {
-    channelName: string;
-    userId: string;
-    text: string;
-    timestamp: number;
-    metadata?: Record<string, unknown>;
-  }): Promise<{ text: string; mediaUrl?: string; mediaPath?: string }>;
+  process(
+    msg: {
+      channelName: string;
+      userId: string;
+      text: string;
+      timestamp: number;
+      metadata?: Record<string, unknown>;
+    },
+    onProgress?: undefined,
+    access?: AccessLevel,
+  ): Promise<{ text: string; mediaUrl?: string; mediaPath?: string }>;
 }
 
 export interface ConnectNotifyDeps {
@@ -32,7 +37,7 @@ export interface ConnectNotifyDeps {
  * log — never guess by broadcasting.
  */
 export function buildConnectNotifyHandler(deps: ConnectNotifyDeps): OnConnectedCallback {
-  return async (userId: string, service: ServiceDefinition, scopes: string[], channelName: string) => {
+  return async (userId: string, service: ServiceDefinition, scopes: string[], channelName: string, chatId: string) => {
     const channel = deps.channels.get(channelName);
     if (!channel) {
       console.error(`❌ onConnected: канал "${channelName}" не найден, уведомление о подключении ${service.name} пропущено`);
@@ -41,11 +46,15 @@ export function buildConnectNotifyHandler(deps: ConnectNotifyDeps): OnConnectedC
 
     try {
       const scopeLabels = scopes.map((s) => service.scopes[s] ?? s).join(", ");
-      await channel.send(userId, {
+      // Address the chat the connect request came from, not the sender —
+      // in a group they can differ, and `send` takes a chat address.
+      await channel.send(chatId, {
         text: `✅ ${service.name} подключён! Доступны: ${scopeLabels}. Проверяю подключение...`,
       });
 
-      // Ask engine to verify the connection
+      // Ask engine to verify the connection. Access is "restricted": a
+      // service getting connected doesn't establish that the person who
+      // did it is the owner — same reasoning as scheduled tasks below.
       const engine = deps.getEngine();
       if (engine) {
         const result = await engine.process({
@@ -54,8 +63,8 @@ export function buildConnectNotifyHandler(deps: ConnectNotifyDeps): OnConnectedC
           text: `Сервис ${service.name} только что подключился (${scopeLabels}). Сделай один тестовый запрос к API чтобы проверить что всё работает, и коротко расскажи результат.`,
           timestamp: Date.now(),
           metadata: { serviceConnected: true },
-        });
-        await channel.send(userId, result);
+        }, undefined, "restricted");
+        await channel.send(chatId, result);
       }
     } catch (err) {
       console.error(`❌ onConnected notification error:`, err);

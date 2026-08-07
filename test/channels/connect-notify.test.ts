@@ -35,7 +35,7 @@ describe("buildConnectNotifyHandler", () => {
     const channels = new Map([["bitrix", bitrix], ["telegram", telegram]]);
 
     const handler = buildConnectNotifyHandler({ channels, getEngine: () => null });
-    await handler("dialog42", service, ["gmail"], "bitrix");
+    await handler("dialog42", service, ["gmail"], "bitrix", "dialog42");
 
     expect(sentBitrix).toHaveLength(1);
     expect(sentBitrix[0].userId).toBe("dialog42");
@@ -54,11 +54,23 @@ describe("buildConnectNotifyHandler", () => {
     const channels = new Map([["bitrix", bitrix], ["telegram", telegram]]);
 
     const handler = buildConnectNotifyHandler({ channels, getEngine: () => null });
-    await handler("123456", service, ["gmail"], "telegram");
+    await handler("123456", service, ["gmail"], "telegram", "123456");
 
     expect(sentTelegram).toHaveLength(1);
     expect(sentTelegram[0].userId).toBe("123456");
     expect(sentBitrix).toHaveLength(0);
+  });
+
+  it("sends to the chat, not the sender, when they differ (group chat)", async () => {
+    const { channel: telegram, sent: sentTelegram } = fakeChannel("telegram");
+    const channels = new Map([["telegram", telegram]]);
+
+    const handler = buildConnectNotifyHandler({ channels, getEngine: () => null });
+    // Sender "999" connected the service from inside group chat "-500".
+    await handler("999", service, ["gmail"], "telegram", "-500");
+
+    expect(sentTelegram).toHaveLength(1);
+    expect(sentTelegram[0].userId).toBe("-500");
   });
 
   it("skips and logs instead of broadcasting when the channel cannot be found", async () => {
@@ -68,7 +80,7 @@ describe("buildConnectNotifyHandler", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const handler = buildConnectNotifyHandler({ channels, getEngine: () => null });
-    await handler("someone", service, ["gmail"], "");
+    await handler("someone", service, ["gmail"], "", "someone");
 
     expect(sentBitrix).toHaveLength(0);
     expect(sentTelegram).toHaveLength(0);
@@ -83,10 +95,13 @@ describe("buildConnectNotifyHandler", () => {
     const engine: EngineLike = { process: engineProcess };
 
     const handler = buildConnectNotifyHandler({ channels, getEngine: () => engine });
-    await handler("dialog42", service, ["gmail"], "bitrix");
+    await handler("dialog42", service, ["gmail"], "bitrix", "dialog42");
 
     expect(engineProcess).toHaveBeenCalledTimes(1);
     expect(engineProcess.mock.calls[0][0]).toMatchObject({ channelName: "bitrix", userId: "dialog42" });
+    // Restricted: connecting a service doesn't establish that the caller is
+    // the owner, so the verification turn must not get owner-level tools.
+    expect(engineProcess.mock.calls[0][2]).toBe("restricted");
     // First the connect confirmation, then the engine's verification result.
     expect(sentBitrix).toHaveLength(2);
     expect(sentBitrix[1].text).toBe("проверила, всё ок");

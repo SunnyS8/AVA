@@ -1,6 +1,14 @@
 export interface IncomingMessage {
   channelName: string
+  /** Who sent the message — keys history, profile and access. In a group
+   *  chat this must be the sender, not the chat: two people sharing a
+   *  chatId would otherwise share one conversation and one access level. */
   userId: string
+  /** Where a reply must be delivered. Equal to `userId` in a 1:1 chat;
+   *  diverges in a group, where the chat is shared but senders are not.
+   *  Falls back to `userId` when a channel has no separate concept of a
+   *  chat (Bitrix dialogs, the browser panel). */
+  chatId?: string
   text: string
   timestamp: number
   metadata?: Record<string, unknown>

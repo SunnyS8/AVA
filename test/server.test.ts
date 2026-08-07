@@ -254,6 +254,57 @@ describe("GET /api/config — secret masking", () => {
   });
 });
 
+describe("POST /api/chat — access level", () => {
+  function fakeEngine() {
+    const process = vi.fn().mockResolvedValue({ text: "ответ" });
+    return { process, getHistory: () => [], clearHistory: () => {} };
+  }
+
+  it("sends the engine 'restricted' when no password is configured — fail safe", async () => {
+    // Without passwordHash the JWT gate in createRequestHandler is skipped
+    // entirely, so this request reached the engine WITHOUT authenticating.
+    // It must not get owner-level tools just because it's the panel route.
+    const engine = fakeEngine();
+    handle = createServer({ port: 0, engine: engine as any });
+    const addr = handle.server.address() as { port: number };
+
+    const res = await fetch(`http://localhost:${addr.port}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "привет" }),
+    });
+    expect(res.status).toBe(200);
+
+    expect(engine.process).toHaveBeenCalledTimes(1);
+    expect(engine.process.mock.calls[0][2]).toBe("restricted");
+  });
+
+  it("sends the engine 'owner' once a password is configured and the caller authenticated", async () => {
+    const crypto = await import("node:crypto");
+    const passwordHash = crypto.createHash("sha256").update("secret123").digest("hex");
+    const engine = fakeEngine();
+    handle = createServer({ port: 0, engine: engine as any, passwordHash });
+    const addr = handle.server.address() as { port: number };
+
+    const authRes = await fetch(`http://localhost:${addr.port}/api/auth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: "secret123" }),
+    });
+    const { token } = (await authRes.json()) as { token: string };
+
+    const res = await fetch(`http://localhost:${addr.port}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ message: "привет" }),
+    });
+    expect(res.status).toBe(200);
+
+    expect(engine.process).toHaveBeenCalledTimes(1);
+    expect(engine.process.mock.calls[0][2]).toBe("owner");
+  });
+});
+
 describe("GET /health", () => {
   it("answers 200 with a plain JSON body, not the SPA shell", async () => {
     handle = createServer({ port: 0 });
