@@ -33,6 +33,7 @@ import { ConnectServiceTool } from "./core/tools/connect-service.js";
 import { buildConnectNotifyHandler } from "./channels/connect-notify.js";
 import { computeTelegramAccess } from "./channels/telegram/access.js";
 import { pickEntry } from "./mode.js";
+import { isToolEnabled } from "./core/tools-enabled.js";
 
 function getAddress(): string {
   const nets = os.networkInterfaces();
@@ -101,17 +102,18 @@ async function main() {
   const schedulerStore = new SchedulerStore(schedulerDb);
   schedulerStore.init();
   const scheduler = new SchedulerService(schedulerStore);
-  tools.register(new ShellTool());
+  const securityTools = config.security?.tools;
+  if (isToolEnabled("shell", securityTools)) tools.register(new ShellTool());
   tools.register(new SendFileTool());
   tools.register(new FilesTool());
   const passwordHash = config.security?.password_hash ?? "default-key-change-me";
   tools.register(new HttpTool({ encryptionKey: passwordHash }));
-  tools.register(new BrowserTool());
+  if (isToolEnabled("browser", securityTools)) tools.register(new BrowserTool());
   tools.register(memoryTool);
   tools.register(selfConfigTool);
   tools.register(scheduler.tool);
-  tools.register(sshTool);
-  tools.register(npmInstallTool);
+  if (isToolEnabled("ssh", securityTools)) tools.register(sshTool);
+  if (isToolEnabled("npm_install", securityTools)) tools.register(npmInstallTool);
   // channels map is populated later — closure captures the reference
   const channels = new Map<string, Channel>();
   tools.register(new ConnectServiceTool({
