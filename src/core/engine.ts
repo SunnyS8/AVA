@@ -376,7 +376,11 @@ export class Engine {
       } catch {}
     }
 
-    let prompt = buildSystemPrompt(this.deps.config, userMessage, userId, connectedServiceNames, access);
+    // Same list the model is actually offered (buildToolDefinitions below
+    // uses the identical filterTools call) — the prompt must not promise
+    // a capability the tool layer will refuse a moment later.
+    const availableToolNames = filterTools(this.deps.tools.list(), access).map((t) => t.name);
+    let prompt = buildSystemPrompt(this.deps.config, userMessage, userId, connectedServiceNames, access, availableToolNames);
 
     // Search knowledge base for context relevant to the user's message.
     // Owner-only: this is the owner's personal memory and must not leak

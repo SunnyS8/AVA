@@ -75,4 +75,38 @@ describe("buildSystemPrompt", () => {
     const prompt = buildSystemPrompt({ name: "Бетси" });
     expect(prompt).toContain("русском языке");
   });
+
+  it("mentions the terminal only when shell is in the available tools list", () => {
+    const withShell = buildSystemPrompt(
+      { name: "Бетси" }, undefined, undefined, undefined, "owner", ["shell", "memory"],
+    );
+    expect(withShell).toContain("shell");
+
+    const withoutShell = buildSystemPrompt(
+      { name: "Бетси" }, undefined, undefined, undefined, "owner", ["memory"],
+    );
+    expect(withoutShell).not.toContain("shell");
+  });
+
+  it("mentions ssh only when ssh is in the available tools list", () => {
+    const withSsh = buildSystemPrompt(
+      { name: "Бетси" }, undefined, undefined, undefined, "owner", ["ssh", "memory"],
+    );
+    expect(withSsh).toContain("ssh");
+
+    const withoutSsh = buildSystemPrompt(
+      { name: "Бетси" }, undefined, undefined, undefined, "owner", ["memory"],
+    );
+    expect(withoutSsh).not.toContain("ssh");
+  });
+
+  it("does not promise a terminal or ssh to a restricted stranger limited to safe tools", () => {
+    // Mirrors what engine.ts actually passes: filterTools(tools, "restricted")
+    // — only SAFE_TOOL_NAMES from access.ts survive, shell/ssh never do.
+    const prompt = buildSystemPrompt(
+      { name: "Бетси" }, undefined, undefined, undefined, "restricted", ["web", "selfie", "image_gen"],
+    );
+    expect(prompt).not.toContain("shell");
+    expect(prompt).not.toContain("ssh");
+  });
 });
