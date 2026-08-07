@@ -40,13 +40,27 @@ export class BitrixChannel implements Channel {
     }
     this.applicationToken = this.applicationToken ?? config.application_token;
     this.botId = this.botId ?? config.bot_id;
-    this.client = this.client ?? new BitrixClient(config.webhook_url, config.bot_id);
+    if (!this.botId) {
+      // Without our own id the anti-loop guard cannot tell our own messages
+      // from anyone else's, and the bot would answer itself until the limits
+      // run out. requiredConfig already declares bot_id mandatory — refuse to
+      // start rather than run with the guard silently disabled.
+      throw new Error("BitrixChannel: bot_id is required — the anti-loop guard depends on it");
+    }
+    this.client = this.client ?? new BitrixClient(config.webhook_url, this.botId);
   }
 
   async stop(): Promise<void> {
     await this.queue.idle();
   }
 
+  /**
+   * Sends into a Bitrix DIALOG. The `Channel` interface calls this first
+   * parameter `userId`, but here it is a dialog id ("chat42"), not a person
+   * ("17") — `IncomingMessage.userId` carries the person, and the two are not
+   * interchangeable. Anything wiring proactive sends (scheduler, service
+   * notifications) must pass the dialog id from `metadata.dialogId`.
+   */
   async send(dialogId: string, message: OutgoingMessage): Promise<void> {
     await this.client?.sendMessage(dialogId, message.text);
   }

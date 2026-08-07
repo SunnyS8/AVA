@@ -88,4 +88,27 @@ describe("BitrixChannel", () => {
     ch.onMessage(async () => ({ text: "ответ" }));
     expect(ch.handleWebhook("garbage=1").status).toBe(400);
   });
+
+  it("refuses to start without a bot id — the anti-loop guard depends on it", async () => {
+    const ch = new BitrixChannel();
+    ch.onMessage(async () => ({ text: "ok" }));
+    await expect(
+      ch.start({
+        webhook_url: "https://p.bitrix24.ru/rest/6/secret/",
+        application_token: "tok",
+        bot_id: "",
+      }),
+    ).rejects.toThrow(/bot_id/);
+  });
+
+  it("does not call the engine on an empty message", async () => {
+    const { ch, sent } = makeChannel();
+    const asked = vi.fn().mockResolvedValue({ text: "ответ" });
+    ch.onMessage(asked);
+    const res = ch.handleWebhook(body({ text: "" }));
+    expect(res.status).toBe(200);
+    await ch.idle();
+    expect(asked).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+  });
 });
