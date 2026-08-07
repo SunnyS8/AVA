@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from "vitest";
 import { createServer, type ServerHandle } from "../src/server.js";
 
 let handle: ServerHandle | null = null;
@@ -153,5 +153,28 @@ describe("Server", () => {
 
     const body = (await res.json()) as { skills: string[] };
     expect(Array.isArray(body.skills)).toBe(true);
+  });
+});
+
+describe("POST /bitrix/", () => {
+  it("passes the body to the channel and answers its status without a token", async () => {
+    const handleWebhook = vi.fn().mockReturnValue({ status: 200 });
+    handle = createServer({ port: 0, passwordHash: "irrelevant", bitrix: { handleWebhook } });
+    const addr = handle.server.address() as { port: number };
+
+    const res = await fetch(`http://localhost:${addr.port}/bitrix/`, {
+      method: "POST",
+      body: "event=ONIMBOTMESSAGEADD",
+    });
+
+    expect(res.status).toBe(200);
+    expect(handleWebhook).toHaveBeenCalledWith("event=ONIMBOTMESSAGEADD");
+  });
+
+  it("answers 404 when no bitrix channel is wired up", async () => {
+    handle = createServer({ port: 0 });
+    const addr = handle.server.address() as { port: number };
+    const res = await fetch(`http://localhost:${addr.port}/bitrix/`, { method: "POST", body: "x" });
+    expect(res.status).toBe(404);
   });
 });

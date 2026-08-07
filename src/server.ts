@@ -21,6 +21,8 @@ export interface ServerOptions {
   engine?: any;
   channels?: any[];
   passwordHash?: string;
+  /** Bitrix webhook sink. Wired in src/index.ts when the channel is enabled. */
+  bitrix?: { handleWebhook(body: string): { status: number } };
 }
 
 export interface ServerHandle {
@@ -207,6 +209,29 @@ function createRequestHandler(ctx: ServerContext, options: ServerOptions) {
     }
 
     const url = new URL(req.url ?? "/", `http://localhost:${port}`);
+
+    if (url.pathname.startsWith("/bitrix/")) {
+      // No JWT here on purpose: Bitrix cannot present one. Authenticity is
+      // proven by the application token inside the event body.
+      if (req.method !== "POST") {
+        res.writeHead(405);
+        res.end();
+        return;
+      }
+      if (!options.bitrix) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const { status } = options.bitrix!.handleWebhook(body);
+        res.writeHead(status);
+        res.end();
+      });
+      return;
+    }
 
     if (url.pathname.startsWith("/api/")) {
       // Auth check — if a password is configured, enforce JWT on protected routes
