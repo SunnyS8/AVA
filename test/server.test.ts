@@ -177,4 +177,21 @@ describe("POST /bitrix/", () => {
     const res = await fetch(`http://localhost:${addr.port}/bitrix/`, { method: "POST", body: "x" });
     expect(res.status).toBe(404);
   });
+
+  it("refuses an oversized body instead of buffering it", async () => {
+    const handleWebhook = vi.fn().mockReturnValue({ status: 200 });
+    handle = createServer({ port: 0, bitrix: { handleWebhook } });
+    const addr = handle.server.address() as { port: number };
+
+    // readBody() caps at 1 MB and destroys the connection on overflow, so the
+    // client sees the socket die rather than a clean HTTP response.
+    await expect(
+      fetch(`http://localhost:${addr.port}/bitrix/`, {
+        method: "POST",
+        body: "x".repeat(2 * 1024 * 1024), // twice the limit
+      }),
+    ).rejects.toThrow();
+
+    expect(handleWebhook).not.toHaveBeenCalled();
+  });
 });

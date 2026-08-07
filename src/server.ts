@@ -223,13 +223,20 @@ function createRequestHandler(ctx: ServerContext, options: ServerOptions) {
         res.end();
         return;
       }
-      let body = "";
-      req.on("data", (chunk) => { body += chunk; });
-      req.on("end", () => {
-        const { status } = options.bitrix!.handleWebhook(body);
-        res.writeHead(status);
-        res.end();
-      });
+      // readBody() caps the size (MAX_BODY_BYTES) and destroys the connection
+      // instead of buffering an unbounded body — this route is the only one
+      // in the file reachable without a JWT, so it must not be the one place
+      // that skips the limit everyone else gets.
+      readBody(req)
+        .then((body) => {
+          const { status } = options.bitrix!.handleWebhook(body);
+          res.writeHead(status);
+          res.end();
+        })
+        .catch(() => {
+          res.writeHead(400);
+          res.end();
+        });
       return;
     }
 
