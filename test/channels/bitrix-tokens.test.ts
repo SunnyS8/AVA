@@ -80,6 +80,21 @@ describe("BitrixTokenStore", () => {
     expect(entries).toEqual(["tokens.json"]);
   });
 
+  it("cleans up the temp file when the write itself fails", () => {
+    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
+      throw new Error("simulated disk full");
+    });
+    try {
+      expect(() => store.save(sample)).toThrow("simulated disk full");
+    } finally {
+      writeSpy.mockRestore();
+    }
+    // No half-written temp file — and no real tokens file either, since the
+    // write never completed and the rename never happened.
+    const entries = fs.readdirSync(dir);
+    expect(entries).toEqual([]);
+  });
+
   describe("isExpired", () => {
     it("treats a token as expired a minute before formal expiry", () => {
       const now = 1_000_000_000;

@@ -93,9 +93,21 @@ export class BitrixTokenStore {
     // instead of silently truncating someone else's file.
     const fd = fs.openSync(tmpPath, "wx", 0o600);
     try {
-      fs.writeFileSync(fd, JSON.stringify(tokens, null, 2));
-    } finally {
-      fs.closeSync(fd);
+      try {
+        fs.writeFileSync(fd, JSON.stringify(tokens, null, 2));
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch (err) {
+      // A failed write must not leave a copy of live tokens lying around.
+      // Cleanup is best-effort: the original failure is what the caller
+      // needs, so a failed unlink here must not replace it.
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {
+        /* nothing more we can do */
+      }
+      throw err;
     }
 
     // Rename is atomic within the same filesystem: readers either see the
