@@ -39,7 +39,10 @@ export function buildSystemPromptForPersona(input: BuildPromptInput): string {
     },
   }
 
-  const base = buildSystemPrompt(config)
+  // This is the Personal Betsy workspace — always a single owner's private
+  // chat, never a multi-party channel — so the owner-info block belongs here.
+  // Passed explicitly: buildSystemPrompt now defaults to "restricted".
+  const base = buildSystemPrompt(config, undefined, undefined, undefined, "owner")
   return `${base}\n\n${ANTI_CLICHE_INSTRUCTIONS}\n\n${FORMATTING_INSTRUCTIONS}\n\n${WEB_SEARCH_INSTRUCTIONS}\n\n${SELFIE_INSTRUCTIONS}\n\n${RECALL_INSTRUCTIONS}`
 }
 

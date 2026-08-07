@@ -45,14 +45,22 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("self_config");
   });
 
-  it("includes owner info when provided", () => {
-    const prompt = buildSystemPrompt({
-      name: "Бетси",
-      owner: {
-        name: "Константин",
-        facts: ["день рождения 4 мая", "жена Аня", "дочь Лиза"],
+  it("includes owner info when provided and access is owner", () => {
+    // access defaults to "restricted" (fail-closed) — this test is about the
+    // owner-info block itself, so it passes "owner" explicitly.
+    const prompt = buildSystemPrompt(
+      {
+        name: "Бетси",
+        owner: {
+          name: "Константин",
+          facts: ["день рождения 4 мая", "жена Аня", "дочь Лиза"],
+        },
       },
-    });
+      undefined,
+      undefined,
+      undefined,
+      "owner",
+    );
     expect(prompt).toContain("Константин");
     expect(prompt).toContain("день рождения 4 мая");
     expect(prompt).toContain("жена Аня");

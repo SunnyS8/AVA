@@ -20,8 +20,12 @@ export type AccessLevel = "owner" | "restricted";
 // instead of the filesystem. They can return once those tools validate the
 // target; the pattern already exists in src/multi/agents/tools/fetch-url-tool.ts
 // (isBlockedHost / isBlockedUrl).
+//
+// Deliberately absent: "memory". It is a thin wrapper over the same global
+// knowledge table that this module keeps away from strangers — list returns
+// everything, and delete/save let a stranger damage the owner's memory. It
+// can return once the knowledge base is partitioned per user.
 export const SAFE_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "memory",
   "web",
   "image_gen",
   "selfie",

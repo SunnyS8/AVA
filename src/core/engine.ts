@@ -390,18 +390,23 @@ export class Engine {
       }
     }
 
-    // Inject installed skills context
-    try {
-      const skillsStore = new SkillsStore();
-      const allSkills = skillsStore.listAll();
-      if (allSkills.length > 0) {
-        const skillContext = allSkills
-          .slice(0, 3)
-          .map((s, i) => `${i + 1}. [${s.name}] ${s.description}`)
-          .join("\n");
-        prompt += `\n\n## Установленные скиллы\n\n${skillContext}\n\nЧтобы использовать скилл, вспомни его содержимое из памяти.`;
-      }
-    } catch {}
+    // Inject installed skills context. Owner-only: the skills store is a
+    // single shared table (same shape as the knowledge base above) — a
+    // skill's name/description can reveal what the owner privately taught
+    // Ava, so a restricted conversation must not see it either.
+    if (access === "owner") {
+      try {
+        const skillsStore = new SkillsStore();
+        const allSkills = skillsStore.listAll();
+        if (allSkills.length > 0) {
+          const skillContext = allSkills
+            .slice(0, 3)
+            .map((s, i) => `${i + 1}. [${s.name}] ${s.description}`)
+            .join("\n");
+          prompt += `\n\n## Установленные скиллы\n\n${skillContext}\n\nЧтобы использовать скилл, вспомни его содержимое из памяти.`;
+        }
+      } catch {}
+    }
 
     const summary = this.summaries.get(chatId);
     if (summary) {

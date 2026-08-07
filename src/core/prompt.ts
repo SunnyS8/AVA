@@ -41,7 +41,7 @@ export function buildSystemPrompt(
   userMessage?: string,
   chatId?: string,
   connectedServices?: string[],
-  access: AccessLevel = "owner",
+  access: AccessLevel = "restricted",
 ): string {
   const name = config.name || "Betsy";
   const gender = config.gender ?? "female";

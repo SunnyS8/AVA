@@ -16,9 +16,16 @@ describe("access levels", () => {
   });
 
   it("allows conversation tools to everyone", () => {
-    for (const name of ["memory", "web", "image_gen", "selfie"]) {
+    for (const name of ["web", "image_gen", "selfie"]) {
       expect(isToolAllowed(name, "restricted")).toBe(true);
     }
+  });
+
+  it("keeps a stranger out of the owner's knowledge base", () => {
+    // memory читает и пишет ту же общую таблицу, что закрыта в движке:
+    // list отдаёт всё, delete портит память владельца
+    expect(isToolAllowed("memory", "restricted")).toBe(false);
+    expect(isToolAllowed("memory", "owner")).toBe(true);
   });
 
   it("keeps a stranger away from arbitrary network destinations", () => {
@@ -37,9 +44,9 @@ describe("access levels", () => {
   });
 
   it("filters a tool list without mutating it", () => {
-    const tools = [{ name: "shell" }, { name: "memory" }, { name: "ssh" }];
+    const tools = [{ name: "shell" }, { name: "web" }, { name: "ssh" }];
     const out = filterTools(tools, "restricted");
-    expect(out.map((t) => t.name)).toEqual(["memory"]);
+    expect(out.map((t) => t.name)).toEqual(["web"]);
     expect(tools).toHaveLength(3);
     expect(filterTools(tools, "owner")).toHaveLength(3);
   });
