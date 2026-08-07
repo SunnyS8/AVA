@@ -5,6 +5,7 @@ import os from "node:os";
 import crypto from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import { loadConfig, saveConfig, isConfigured, type BetsyConfig } from "./core/config.js";
+import type { AccessLevel } from "./core/access.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -331,7 +332,7 @@ function handleApi(
     if (req.method === "GET") {
       handleChatGet(res, ctx);
     } else if (req.method === "POST") {
-      handleChatSend(req, res, ctx);
+      handleChatSend(req, res, ctx, options);
     } else {
       json(res, { error: "Method not allowed" }, 405);
     }
@@ -712,6 +713,7 @@ async function handleChatSend(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   ctx: ServerContext,
+  options: ServerOptions,
 ) {
   if (!ctx.engine) {
     json(res, { error: "Движок не запущен. Настрой LLM в конфиге." }, 503);
@@ -725,15 +727,18 @@ async function handleChatSend(
       return;
     }
 
-    // Owner-level access: the panel sits behind handleAuth's password/JWT
-    // check above (see PUBLIC_ROUTES / isPublicRoute), so whoever reached
-    // this handler already authenticated as the owner.
+    // The panel gets owner access only when authentication is actually
+    // enforced. Without passwordHash the JWT gate in this file is skipped
+    // entirely (see createRequestHandler's `options.passwordHash &&` check),
+    // so an unauthenticated request would otherwise walk in with shell and
+    // file access. Fail safe: no auth configured -> no privileges.
+    const access: AccessLevel = options.passwordHash ? "owner" : "restricted";
     const result = await ctx.engine.process({
       channelName: "browser",
       userId: BROWSER_USER_ID,
       text: body.message.trim(),
       timestamp: Date.now(),
-    }, undefined, "owner");
+    }, undefined, access);
 
     json(res, { reply: result.text, mediaUrl: result.mediaUrl });
   } catch (err) {

@@ -363,12 +363,12 @@ export class Engine {
   }
 
   /** Build system prompt and inject relevant memory context. */
-  private buildPromptWithMemory(userMessage: string, chatId: string, access: AccessLevel): string {
+  private buildPromptWithMemory(userMessage: string, userId: string, access: AccessLevel): string {
     let connectedServiceNames: string[] = [];
     if (this.deps.encryptionKey) {
       try {
         const tokenStore = new TokenStore(this.deps.encryptionKey);
-        const tokens = tokenStore.listConnected(chatId);
+        const tokens = tokenStore.listConnected(userId);
         connectedServiceNames = tokens.map(t => {
           const svc = getService(t.serviceId);
           return svc ? `${svc.name} (${t.scopes})` : t.serviceId;
@@ -376,7 +376,7 @@ export class Engine {
       } catch {}
     }
 
-    let prompt = buildSystemPrompt(this.deps.config, userMessage, chatId, connectedServiceNames, access);
+    let prompt = buildSystemPrompt(this.deps.config, userMessage, userId, connectedServiceNames, access);
 
     // Search knowledge base for context relevant to the user's message.
     // Owner-only: this is the owner's personal memory and must not leak
@@ -413,7 +413,7 @@ export class Engine {
       } catch {}
     }
 
-    const summary = this.summaries.get(chatId);
+    const summary = this.summaries.get(userId);
     if (summary) {
       prompt += `\n\n## Краткое содержание предыдущего разговора\n\n${summary}`;
     }

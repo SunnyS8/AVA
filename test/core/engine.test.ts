@@ -131,4 +131,86 @@ describe("Engine", () => {
     expect(seenParams[0]._userId).toBe("employee-7");
     expect(seenParams[0]._channelName).toBe("bitrix");
   });
+
+  it("injects _chatId — the address for a tool's later out-of-band reply — separately from _userId", async () => {
+    // connect_service's onConnected callback (fired later, out of band, see
+    // src/channels/connect-notify.ts) must reply into the chat the request
+    // came from, not into whichever member of a group happened to send it.
+    // msg.chatId carries that address; msg.userId keys history/access and
+    // stays sender-based (see resolveTelegramIds in
+    // src/channels/telegram/handlers.ts).
+    const seenParams: Record<string, unknown>[] = [];
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "recorder",
+      description: "Records the params it was called with",
+      parameters: [],
+      async execute(params) {
+        seenParams.push(params);
+        return { success: true, output: "ok" };
+      },
+    });
+
+    const chatMock = vi.fn()
+      .mockResolvedValueOnce({
+        text: "",
+        stopReason: "tool_use",
+        toolCalls: [{ id: "call_1", name: "recorder", arguments: {} }],
+      })
+      .mockResolvedValueOnce({ text: "done", stopReason: "end_turn" });
+
+    const llm = { fast: () => ({ chat: chatMock }), strong: () => ({ chat: chatMock }) };
+    const engine = new Engine({ llm, config: testConfig, tools, contextBudget: 40000 });
+
+    await engine.process({
+      channelName: "telegram",
+      userId: "sender-1",
+      chatId: "-500", // a group chat, distinct from the sender who typed the message
+      text: "connect google",
+      timestamp: Date.now(),
+    }, undefined, "owner");
+
+    expect(seenParams).toHaveLength(1);
+    expect(seenParams[0]._userId).toBe("sender-1");
+    expect(seenParams[0]._chatId).toBe("-500");
+  });
+
+  it("falls back _chatId to userId when the incoming message has no separate chatId", async () => {
+    // Bitrix dialogs, the browser panel and scheduler-fired messages have no
+    // group/sender split — chatId must default to userId, not "unknown" or
+    // undefined, so their existing single-address behaviour is unchanged.
+    const seenParams: Record<string, unknown>[] = [];
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "recorder",
+      description: "Records the params it was called with",
+      parameters: [],
+      async execute(params) {
+        seenParams.push(params);
+        return { success: true, output: "ok" };
+      },
+    });
+
+    const chatMock = vi.fn()
+      .mockResolvedValueOnce({
+        text: "",
+        stopReason: "tool_use",
+        toolCalls: [{ id: "call_1", name: "recorder", arguments: {} }],
+      })
+      .mockResolvedValueOnce({ text: "done", stopReason: "end_turn" });
+
+    const llm = { fast: () => ({ chat: chatMock }), strong: () => ({ chat: chatMock }) };
+    const engine = new Engine({ llm, config: testConfig, tools, contextBudget: 40000 });
+
+    await engine.process({
+      channelName: "bitrix",
+      userId: "dialog42",
+      // no chatId field
+      text: "connect google",
+      timestamp: Date.now(),
+    }, undefined, "owner");
+
+    expect(seenParams).toHaveLength(1);
+    expect(seenParams[0]._chatId).toBe("dialog42");
+  });
 });
