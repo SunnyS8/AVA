@@ -1,4 +1,7 @@
-import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import { createServer, type ServerHandle } from "../src/server.js";
 
 let handle: ServerHandle | null = null;
@@ -153,5 +156,119 @@ describe("Server", () => {
 
     const body = (await res.json()) as { skills: string[] };
     expect(Array.isArray(body.skills)).toBe(true);
+  });
+});
+
+describe("POST /bitrix/", () => {
+  it("passes the body to the channel and answers its status without a token", async () => {
+    const handleWebhook = vi.fn().mockReturnValue({ status: 200 });
+    handle = createServer({ port: 0, passwordHash: "irrelevant", bitrix: { handleWebhook } });
+    const addr = handle.server.address() as { port: number };
+
+    const res = await fetch(`http://localhost:${addr.port}/bitrix/`, {
+      method: "POST",
+      body: "event=ONIMBOTMESSAGEADD",
+    });
+
+    expect(res.status).toBe(200);
+    expect(handleWebhook).toHaveBeenCalledWith("event=ONIMBOTMESSAGEADD");
+  });
+
+  it("answers 404 when no bitrix channel is wired up", async () => {
+    handle = createServer({ port: 0 });
+    const addr = handle.server.address() as { port: number };
+    const res = await fetch(`http://localhost:${addr.port}/bitrix/`, { method: "POST", body: "x" });
+    expect(res.status).toBe(404);
+  });
+
+  it("refuses an oversized body instead of buffering it", async () => {
+    const handleWebhook = vi.fn().mockReturnValue({ status: 200 });
+    handle = createServer({ port: 0, bitrix: { handleWebhook } });
+    const addr = handle.server.address() as { port: number };
+
+    // readBody() caps at 1 MB and destroys the connection on overflow, so the
+    // client sees the socket die rather than a clean HTTP response.
+    await expect(
+      fetch(`http://localhost:${addr.port}/bitrix/`, {
+        method: "POST",
+        body: "x".repeat(2 * 1024 * 1024), // twice the limit
+      }),
+    ).rejects.toThrow();
+
+    expect(handleWebhook).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/config — secret masking", () => {
+  const tmpConfigPath = path.join(os.tmpdir(), `betsy-test-config-${Date.now()}.yaml`);
+  let prevPath: string | undefined;
+
+  beforeAll(() => {
+    prevPath = process.env.BETSY_CONFIG_PATH;
+    fs.writeFileSync(
+      tmpConfigPath,
+      [
+        "agent:",
+        "  name: Test",
+        "llm:",
+        "  provider: openrouter",
+        "  api_key: sk-secret-llm-key",
+        "telegram:",
+        "  token: tg-secret-token",
+        "bitrix:",
+        '  webhook_url: "https://p.bitrix24.ru/rest/6/verysecrettoken123/"',
+        '  application_token: "app-secret-token-xyz"',
+        "",
+      ].join("\n"),
+    );
+    process.env.BETSY_CONFIG_PATH = tmpConfigPath;
+  });
+
+  afterAll(() => {
+    if (prevPath === undefined) delete process.env.BETSY_CONFIG_PATH;
+    else process.env.BETSY_CONFIG_PATH = prevPath;
+    fs.rmSync(tmpConfigPath, { force: true });
+  });
+
+  it("does not leak the bitrix webhook url or application token", async () => {
+    handle = createServer({ port: 0 });
+    const addr = handle.server.address() as { port: number };
+
+    const res = await fetch(`http://localhost:${addr.port}/api/config`);
+    expect(res.status).toBe(200);
+
+    const bodyText = await res.text();
+    // The webhook URL carries the portal access token in its path
+    // (…/rest/<user>/<token>/) — a raw copy anywhere in the response is a leak.
+    expect(bodyText).not.toContain("verysecrettoken123");
+    expect(bodyText).not.toContain("app-secret-token-xyz");
+    // Sanity: other already-masked secrets stay masked too (regression guard).
+    expect(bodyText).not.toContain("sk-secret-llm-key");
+    expect(bodyText).not.toContain("tg-secret-token");
+
+    const body = JSON.parse(bodyText) as { bitrix?: { webhook_url?: string; application_token?: string } };
+    expect(body.bitrix?.webhook_url).toBeTruthy();
+    expect(body.bitrix?.webhook_url).not.toBe("https://p.bitrix24.ru/rest/6/verysecrettoken123/");
+    expect(body.bitrix?.application_token).toBeTruthy();
+    expect(body.bitrix?.application_token).not.toBe("app-secret-token-xyz");
+  });
+});
+
+describe("GET /health", () => {
+  it("answers 200 with a plain JSON body, not the SPA shell", async () => {
+    handle = createServer({ port: 0 });
+    const addr = handle.server.address() as { port: number };
+
+    const res = await fetch(`http://localhost:${addr.port}/health`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+
+    // The public nginx block (deploy/nginx-ava-public.conf) proxies this
+    // route straight to the open internet. If it ever fell through to
+    // serveStatic()'s SPA fallback, an outside caller would receive the
+    // control-panel's index.html — exactly what the stage rule forbids.
+    const text = await res.text();
+    expect(text).not.toContain("<html");
+    expect(JSON.parse(text)).toEqual({ status: "ok" });
   });
 });

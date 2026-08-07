@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
-import { loadConfig, getPersonality, getLLMApiKey, getAgentName } from "../../src/core/config.js";
+import { loadConfig, getPersonality, getLLMApiKey, getAgentName, parseConfig } from "../../src/core/config.js";
 
 const TEST_DIR = path.join(os.tmpdir(), `betsy-config-test-${Date.now()}`);
 
@@ -112,5 +112,96 @@ fallback_models:
     const llm = config!.llm as any;
     expect(llm.fallback_models).toEqual(["free/model-1"]);
     fs.unlinkSync(tmpPath);
+  });
+});
+
+describe("bitrix and profiles config", () => {
+  it("accepts a bitrix section", () => {
+    const cfg = parseConfig({
+      agent: { name: "Ава" },
+      bitrix: { webhook_url: "https://p.bitrix24.ru/rest/1/abc/", application_token: "tok" },
+    });
+    expect(cfg.bitrix?.webhook_url).toContain("/rest/");
+    expect(cfg.bitrix?.application_token).toBe("tok");
+  });
+
+  it("fills profile defaults so missing lists mean 'nobody'", () => {
+    const cfg = parseConfig({ agent: { name: "Ава" }, profiles: {} });
+    expect(cfg.profiles?.voice_ids).toEqual([]);
+    expect(cfg.profiles?.video_ids).toEqual([]);
+    expect(cfg.profiles?.limits.per_hour).toBe(15);
+    expect(cfg.profiles?.limits.per_day_total).toBe(300);
+  });
+
+  it("works without either section", () => {
+    const cfg = parseConfig({ agent: { name: "Ава" } });
+    expect(cfg.bitrix).toBeUndefined();
+    expect(cfg.profiles).toBeUndefined();
+  });
+
+  it("coerces a numeric bot_id to a string instead of silently dropping it", () => {
+    // Owner pastes bot_id from the registration script's printed output into
+    // YAML unquoted (`bot_id: 42`) — that parses as a number. Before
+    // z.coerce.string(), the string schema rejected it, parseConfig's
+    // best-effort recovery deleted the field, and the Bitrix channel never
+    // started (src/index.ts requires bot_id) — with nothing telling anyone
+    // why.
+    const cfg = parseConfig({
+      agent: { name: "Ава" },
+      bitrix: { webhook_url: "https://p.bitrix24.ru/rest/1/abc/", application_token: "tok", bot_id: 42 },
+    });
+    expect(cfg.bitrix?.bot_id).toBe("42");
+    expect(typeof cfg.bitrix?.bot_id).toBe("string");
+  });
+
+  it("coerces numeric owner_id and id lists in profiles to strings", () => {
+    // Same trap as bot_id: `owner_id: 1` unquoted makes the owner compare as
+    // a number against resolveProfile's string userId and fall through to
+    // "employee" — losing unlimited access. Lists of ids have the same risk.
+    const cfg = parseConfig({
+      agent: { name: "Ава" },
+      profiles: {
+        owner_id: 1,
+        analyst_ids: [2, 3],
+        marketing_head_ids: [4],
+        marketing_specialist_ids: [5],
+        voice_ids: [6],
+        video_ids: [7],
+      },
+    });
+    expect(cfg.profiles?.owner_id).toBe("1");
+    expect(typeof cfg.profiles?.owner_id).toBe("string");
+    expect(cfg.profiles?.analyst_ids).toEqual(["2", "3"]);
+    expect(cfg.profiles?.marketing_head_ids).toEqual(["4"]);
+    expect(cfg.profiles?.marketing_specialist_ids).toEqual(["5"]);
+    expect(cfg.profiles?.voice_ids).toEqual(["6"]);
+    expect(cfg.profiles?.video_ids).toEqual(["7"]);
+  });
+
+  it("still accepts string ids as before (coercion is not exclusive)", () => {
+    const cfg = parseConfig({
+      agent: { name: "Ава" },
+      bitrix: { webhook_url: "https://p.bitrix24.ru/rest/1/abc/", application_token: "tok", bot_id: "42" },
+      profiles: { owner_id: "1", analyst_ids: ["2"] },
+    });
+    expect(cfg.bitrix?.bot_id).toBe("42");
+    expect(cfg.profiles?.owner_id).toBe("1");
+    expect(cfg.profiles?.analyst_ids).toEqual(["2"]);
+  });
+
+  it("does not let a malformed bitrix section through untouched", () => {
+    // Схема ловит неверный тип. Восстановление удаляет поле, секция остаётся
+    // без обязательного webhook_url — и разбор падает. Это осознанно: конфиг с
+    // опечаткой роняет запуск ГРОМКО. Молча выкинуть секцию было бы хуже —
+    // Ава поднялась бы без Битрикса, сотрудники писали бы в пустоту, и никто
+    // бы об этом не узнал.
+    // Без секции bitrix в схеме passthrough пропустил бы мусор и исключения
+    // не было бы — поэтому тест действительно проверяет схему.
+    expect(() =>
+      parseConfig({
+        agent: { name: "Ава" },
+        bitrix: { webhook_url: 123, application_token: "tok" },
+      }),
+    ).toThrow();
   });
 });

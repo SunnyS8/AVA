@@ -242,7 +242,7 @@ export class Engine {
           onProgress?.({ type: "tool_start", tool: tc.name, turn: turn + 1 });
 
           const toolStart = Date.now();
-          const result = await this.executeTool(tc.name, tc.arguments, userId);
+          const result = await this.executeTool(tc.name, tc.arguments, userId, msg.channelName);
           const toolMs = Date.now() - toolStart;
 
           let resultText = result.success
@@ -420,14 +420,19 @@ export class Engine {
   }
 
   /** Execute a single tool by name. Returns full ToolResult. */
-  private async executeTool(name: string, args: Record<string, unknown>, userId?: string): Promise<ToolResult> {
+  private async executeTool(name: string, args: Record<string, unknown>, userId?: string, channelName?: string): Promise<ToolResult> {
     const tool = this.deps.tools.get(name);
     if (!tool) {
       return { success: false, output: "", error: `unknown tool "${name}"` };
     }
 
     try {
-      const params = userId ? { ...args, _userId: userId } : args;
+      let params = args;
+      if (userId) params = { ...params, _userId: userId };
+      // Lets tools that trigger later, out-of-band delivery (e.g. connect_service's
+      // OAuth polling callback) remember which channel the request came from,
+      // instead of guessing or broadcasting to every channel.
+      if (channelName) params = { ...params, _channelName: channelName };
       return await tool.execute(params);
     } catch (err) {
       return { success: false, output: "", error: err instanceof Error ? err.message : String(err) };

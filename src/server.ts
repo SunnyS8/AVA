@@ -21,6 +21,8 @@ export interface ServerOptions {
   engine?: any;
   channels?: any[];
   passwordHash?: string;
+  /** Bitrix webhook sink. Wired in src/index.ts when the channel is enabled. */
+  bitrix?: { handleWebhook(body: string): { status: number } };
 }
 
 export interface ServerHandle {
@@ -208,6 +210,45 @@ function createRequestHandler(ctx: ServerContext, options: ServerOptions) {
 
     const url = new URL(req.url ?? "/", `http://localhost:${port}`);
 
+    if (url.pathname === "/health") {
+      // Public: proxied straight through by the nginx public block
+      // (deploy/nginx-ava-public.conf), no JWT possible here. Keep the body
+      // minimal — no config/state — this is the one route exposed to the
+      // open internet besides /bitrix/.
+      json(res, { status: "ok" });
+      return;
+    }
+
+    if (url.pathname.startsWith("/bitrix/")) {
+      // No JWT here on purpose: Bitrix cannot present one. Authenticity is
+      // proven by the application token inside the event body.
+      if (req.method !== "POST") {
+        res.writeHead(405);
+        res.end();
+        return;
+      }
+      if (!options.bitrix) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      // readBody() caps the size (MAX_BODY_BYTES) and destroys the connection
+      // instead of buffering an unbounded body — this route is the only one
+      // in the file reachable without a JWT, so it must not be the one place
+      // that skips the limit everyone else gets.
+      readBody(req)
+        .then((body) => {
+          const { status } = options.bitrix!.handleWebhook(body);
+          res.writeHead(status);
+          res.end();
+        })
+        .catch(() => {
+          res.writeHead(400);
+          res.end();
+        });
+      return;
+    }
+
     if (url.pathname.startsWith("/api/")) {
       // Auth check — if a password is configured, enforce JWT on protected routes
       if (options.passwordHash && !isPublicRoute(url.pathname, req.method ?? "GET", ctx)) {
@@ -393,6 +434,11 @@ function handleConfigGet(res: http.ServerResponse, ctx: ServerContext) {
   if (safe.sync_so?.api_key) safe.sync_so.api_key = mask(safe.sync_so.api_key);
   if (safe.selfies?.fal_api_key) safe.selfies.fal_api_key = mask(safe.selfies.fal_api_key);
   if (safe.skillsmp?.api_key) safe.skillsmp.api_key = mask(safe.skillsmp.api_key);
+  // The Bitrix webhook URL has the portal access token baked into its path
+  // (…/rest/<user>/<token>/) — masking only api_key-shaped fields would leak
+  // it whole.
+  if (safe.bitrix?.webhook_url) safe.bitrix.webhook_url = mask(safe.bitrix.webhook_url);
+  if (safe.bitrix?.application_token) safe.bitrix.application_token = mask(safe.bitrix.application_token);
 
   json(res, { configured: true, ...safe });
 }
