@@ -13,6 +13,13 @@ export function verifyEvent(event: BitrixEvent, expectedToken: string | undefine
   if (!expectedToken) return false;
   if (!event.applicationToken) return false;
 
+  // The event comes from parsing someone else's request body: the declared
+  // string type is a promise, not a guarantee. A crash here would be a denial
+  // of service where a plain refusal is what we want.
+  if (typeof event.applicationToken !== "string" || typeof expectedToken !== "string") {
+    return false;
+  }
+
   const a = Buffer.from(event.applicationToken);
   const b = Buffer.from(expectedToken);
   if (a.length !== b.length) return false;

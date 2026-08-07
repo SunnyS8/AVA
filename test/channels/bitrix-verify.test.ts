@@ -8,7 +8,7 @@ const ev = (token: string): BitrixEvent => ({
   fromUserId: "7",
   text: "hi",
   applicationToken: token,
-  fromBot: false,
+  authorId: "17",
 });
 
 describe("verifyEvent", () => {
@@ -27,5 +27,17 @@ describe("verifyEvent", () => {
   it("rejects everything when no token is configured", () => {
     expect(verifyEvent(ev("anything"), undefined)).toBe(false);
     expect(verifyEvent(ev("anything"), "")).toBe(false);
+  });
+
+  it("rejects a forged token OF THE SAME LENGTH", () => {
+    // Главный тест этого модуля. Реализация, сравнивающая только длину,
+    // проходит все остальные тесты и пропускает любой токен нужной длины.
+    expect(verifyEvent(ev("goop"), "good")).toBe(false);
+  });
+
+  it("rejects when both tokens are empty", () => {
+    // timingSafeEqual двух нулевых буферов возвращает true. Пока это ловят
+    // два отдельных guard'а; тест держит их на месте при будущих упрощениях.
+    expect(verifyEvent(ev(""), "")).toBe(false);
   });
 });
