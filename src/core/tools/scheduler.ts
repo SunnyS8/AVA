@@ -101,6 +101,12 @@ interface ContextMessage {
   content: string;
 }
 
+interface MessageContext {
+  channel: string;
+  chatId: string;
+  messages: ContextMessage[];
+}
+
 function buildContext(messages: ContextMessage[]): string {
   const MAX_CHARS = 700;
   const lines: string[] = [];
@@ -129,20 +135,29 @@ export class SchedulerService {
   private fireCallback: TaskFireCallback | null = null;
   private tickHandle: ReturnType<typeof setInterval> | null = null;
 
-  // Mutable message context — set before each tool execution
-  private currentChannel = "";
-  private currentChatId = "";
-  private currentMessages: ContextMessage[] = [];
+  // Message context per user. The Bitrix queue runs different dialogs
+  // CONCURRENTLY (src/channels/bitrix/queue.ts), so a single mutable field
+  // here would let one user's in-flight conversation get overwritten by
+  // another's before the scheduler tool actually runs — a task created by
+  // user A would silently pick up user B's channel/chatId. Keying by userId
+  // keeps each conversation's context isolated regardless of interleaving.
+  private contextByUser: Map<string, MessageContext> = new Map();
+  // Fallback for callers that cannot supply a userId (e.g. tests calling
+  // tool.execute() directly without `_userId`, or the tool being invoked
+  // outside the engine's executeTool() wiring). Kept so existing single-user
+  // callers (Telegram in practice always passes _userId — see engine.ts
+  // executeTool) don't crash; production per-user lookups never touch it.
+  private lastContext: MessageContext = { channel: "", chatId: "", messages: [] };
 
   constructor(store: SchedulerStore) {
     this.store = store;
   }
 
-  /** Set current message context. Called by engine before tool execution. */
-  setMessageContext(channel: string, chatId: string, messages: ContextMessage[]): void {
-    this.currentChannel = channel;
-    this.currentChatId = chatId;
-    this.currentMessages = messages;
+  /** Set current message context for a user. Called by the engine before tool execution. */
+  setMessageContext(userId: string, channel: string, chatId: string, messages: ContextMessage[]): void {
+    const ctx: MessageContext = { channel, chatId, messages };
+    this.contextByUser.set(userId, ctx);
+    this.lastContext = ctx;
   }
 
   /** Register callback for when a scheduled task fires. */
@@ -315,7 +330,13 @@ export class SchedulerService {
       return { success: false, output: err instanceof Error ? err.message : String(err), error: "parse_error" };
     }
 
-    const context = buildContext(this.currentMessages);
+    // Look up context by the calling user (injected as _userId by
+    // Engine.executeTool). Falls back to the last context set when no
+    // userId is available, so direct tool.execute() calls (tests, or a
+    // hypothetical caller outside the engine) keep working as before.
+    const userId = params._userId !== undefined ? String(params._userId) : undefined;
+    const ctx = (userId && this.contextByUser.get(userId)) || this.lastContext;
+    const context = buildContext(ctx.messages);
 
     const task: ScheduledTaskRow = {
       id: randomUUID(),
@@ -323,8 +344,8 @@ export class SchedulerService {
       schedule,
       command,
       context,
-      channel: this.currentChannel,
-      chatId: this.currentChatId,
+      channel: ctx.channel,
+      chatId: ctx.chatId,
       nextRunAt,
       lastRunAt: null,
       createdAt: now,

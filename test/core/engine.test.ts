@@ -88,4 +88,44 @@ describe("Engine", () => {
     expect(chatMock).toHaveBeenCalledTimes(2);
     expect(res.text).toContain("Got: hello");
   });
+
+  it("injects _userId and _channelName into tool params so tools can act on the right conversation later", async () => {
+    // connect_service (src/core/tools/connect-service.ts) relies on both:
+    // _userId to store the token, _channelName so its onConnected callback
+    // (fired later, out of band) knows which channel to reply on instead of
+    // fanning out to every registered channel.
+    const seenParams: Record<string, unknown>[] = [];
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "recorder",
+      description: "Records the params it was called with",
+      parameters: [],
+      async execute(params) {
+        seenParams.push(params);
+        return { success: true, output: "ok" };
+      },
+    });
+
+    const chatMock = vi.fn()
+      .mockResolvedValueOnce({
+        text: "",
+        stopReason: "tool_use",
+        toolCalls: [{ id: "call_1", name: "recorder", arguments: {} }],
+      })
+      .mockResolvedValueOnce({ text: "done", stopReason: "end_turn" });
+
+    const llm = { fast: () => ({ chat: chatMock }), strong: () => ({ chat: chatMock }) };
+    const engine = new Engine({ llm, config: testConfig, tools, contextBudget: 40000 });
+
+    await engine.process({
+      channelName: "bitrix",
+      userId: "employee-7",
+      text: "connect google",
+      timestamp: Date.now(),
+    });
+
+    expect(seenParams).toHaveLength(1);
+    expect(seenParams[0]._userId).toBe("employee-7");
+    expect(seenParams[0]._channelName).toBe("bitrix");
+  });
 });

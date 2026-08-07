@@ -434,6 +434,11 @@ function handleConfigGet(res: http.ServerResponse, ctx: ServerContext) {
   if (safe.sync_so?.api_key) safe.sync_so.api_key = mask(safe.sync_so.api_key);
   if (safe.selfies?.fal_api_key) safe.selfies.fal_api_key = mask(safe.selfies.fal_api_key);
   if (safe.skillsmp?.api_key) safe.skillsmp.api_key = mask(safe.skillsmp.api_key);
+  // The Bitrix webhook URL has the portal access token baked into its path
+  // (…/rest/<user>/<token>/) — masking only api_key-shaped fields would leak
+  // it whole.
+  if (safe.bitrix?.webhook_url) safe.bitrix.webhook_url = mask(safe.bitrix.webhook_url);
+  if (safe.bitrix?.application_token) safe.bitrix.application_token = mask(safe.bitrix.application_token);
 
   json(res, { configured: true, ...safe });
 }

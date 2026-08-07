@@ -139,6 +139,56 @@ describe("bitrix and profiles config", () => {
     expect(cfg.profiles).toBeUndefined();
   });
 
+  it("coerces a numeric bot_id to a string instead of silently dropping it", () => {
+    // Owner pastes bot_id from the registration script's printed output into
+    // YAML unquoted (`bot_id: 42`) — that parses as a number. Before
+    // z.coerce.string(), the string schema rejected it, parseConfig's
+    // best-effort recovery deleted the field, and the Bitrix channel never
+    // started (src/index.ts requires bot_id) — with nothing telling anyone
+    // why.
+    const cfg = parseConfig({
+      agent: { name: "Ава" },
+      bitrix: { webhook_url: "https://p.bitrix24.ru/rest/1/abc/", application_token: "tok", bot_id: 42 },
+    });
+    expect(cfg.bitrix?.bot_id).toBe("42");
+    expect(typeof cfg.bitrix?.bot_id).toBe("string");
+  });
+
+  it("coerces numeric owner_id and id lists in profiles to strings", () => {
+    // Same trap as bot_id: `owner_id: 1` unquoted makes the owner compare as
+    // a number against resolveProfile's string userId and fall through to
+    // "employee" — losing unlimited access. Lists of ids have the same risk.
+    const cfg = parseConfig({
+      agent: { name: "Ава" },
+      profiles: {
+        owner_id: 1,
+        analyst_ids: [2, 3],
+        marketing_head_ids: [4],
+        marketing_specialist_ids: [5],
+        voice_ids: [6],
+        video_ids: [7],
+      },
+    });
+    expect(cfg.profiles?.owner_id).toBe("1");
+    expect(typeof cfg.profiles?.owner_id).toBe("string");
+    expect(cfg.profiles?.analyst_ids).toEqual(["2", "3"]);
+    expect(cfg.profiles?.marketing_head_ids).toEqual(["4"]);
+    expect(cfg.profiles?.marketing_specialist_ids).toEqual(["5"]);
+    expect(cfg.profiles?.voice_ids).toEqual(["6"]);
+    expect(cfg.profiles?.video_ids).toEqual(["7"]);
+  });
+
+  it("still accepts string ids as before (coercion is not exclusive)", () => {
+    const cfg = parseConfig({
+      agent: { name: "Ава" },
+      bitrix: { webhook_url: "https://p.bitrix24.ru/rest/1/abc/", application_token: "tok", bot_id: "42" },
+      profiles: { owner_id: "1", analyst_ids: ["2"] },
+    });
+    expect(cfg.bitrix?.bot_id).toBe("42");
+    expect(cfg.profiles?.owner_id).toBe("1");
+    expect(cfg.profiles?.analyst_ids).toEqual(["2"]);
+  });
+
   it("does not let a malformed bitrix section through untouched", () => {
     // Схема ловит неверный тип. Восстановление удаляет поле, секция остаётся
     // без обязательного webhook_url — и разбор падает. Это осознанно: конфиг с

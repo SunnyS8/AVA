@@ -98,6 +98,16 @@ export class BitrixChannel implements Channel {
     if (event.authorId === "0") return { status: 200 };
     if (!event.text) return { status: 200 };
 
+    // Spec: Ava answers only one-on-one dialogs, never group chats — a group
+    // reply on every message would spam a shared work chat. Bitrix marks a
+    // private dialog CHAT_TYPE="P" and a group one "C". An EMPTY chatType
+    // (field absent — e.g. an older portal build, or a payload shape we
+    // haven't seen) is treated as private and answered: the alternative,
+    // treating unknown as group, would silence the bot everywhere the moment
+    // the portal ever omits the field. A wrongly-answered group message once
+    // in a while is a much cheaper mistake than the bot going mute for good.
+    if (event.chatType && event.chatType !== "P") return { status: 200 };
+
     const handler = this.handler;
     const client = this.client;
     if (!handler || !client) return { status: 200 };

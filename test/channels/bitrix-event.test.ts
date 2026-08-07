@@ -27,6 +27,14 @@ describe("parseBitrixEvent", () => {
     expect(zero.authorId).toBe("0");
   });
 
+  it("pulls chat type out of the payload, empty string when absent", () => {
+    expect(parseBitrixEvent(body)!.chatType).toBe("");
+    const priv = parseBitrixEvent(body + "&data%5BPARAMS%5D%5BCHAT_TYPE%5D=P")!;
+    expect(priv.chatType).toBe("P");
+    const group = parseBitrixEvent(body + "&data%5BPARAMS%5D%5BCHAT_TYPE%5D=C")!;
+    expect(group.chatType).toBe("C");
+  });
+
   it("returns null on a body that is not an event", () => {
     expect(parseBitrixEvent("")).toBeNull();
     expect(parseBitrixEvent("hello=world")).toBeNull();

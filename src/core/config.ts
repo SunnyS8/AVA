@@ -86,16 +86,29 @@ const configSchema = z.object({
   bitrix: z.object({
     webhook_url: z.string(),
     application_token: z.string(),
-    bot_id: z.string().optional(),
+    // Identifier, not a secret or a URL — the owner fills it in by hand from
+    // a script's printed output (scripts/register-bitrix-bot.mjs), and YAML
+    // reads an unquoted `bot_id: 42` as a number. Without coercion that
+    // fails the string schema, gets stripped by parseConfig's recovery pass,
+    // and the channel silently never starts (see src/index.ts bot_id guard).
+    // z.coerce.string() accepts both `42` and `"42"` and always yields a
+    // string, so downstream comparisons (BitrixChannel's anti-loop check)
+    // keep working either way.
+    bot_id: z.coerce.string().optional(),
   }).optional(),
 
   profiles: z.object({
-    owner_id: z.string().optional(),
-    analyst_ids: z.array(z.string()).default([]),
-    marketing_head_ids: z.array(z.string()).default([]),
-    marketing_specialist_ids: z.array(z.string()).default([]),
-    voice_ids: z.array(z.string()).default([]),
-    video_ids: z.array(z.string()).default([]),
+    // Same reasoning as bitrix.bot_id above: these are people's numeric
+    // Bitrix/Telegram ids, typed in by hand and easy to leave unquoted.
+    // Coercion keeps `1` and `"1"` equivalent instead of one of them
+    // silently losing an owner their role or limits (resolveProfile does
+    // strict string comparison in src/core/profiles.ts).
+    owner_id: z.coerce.string().optional(),
+    analyst_ids: z.array(z.coerce.string()).default([]),
+    marketing_head_ids: z.array(z.coerce.string()).default([]),
+    marketing_specialist_ids: z.array(z.coerce.string()).default([]),
+    voice_ids: z.array(z.coerce.string()).default([]),
+    video_ids: z.array(z.coerce.string()).default([]),
     modes: z.record(z.string(), z.string()).default({}),
     limits: z.object({
       per_hour: z.number().default(15),

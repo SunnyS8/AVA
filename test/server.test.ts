@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import { createServer, type ServerHandle } from "../src/server.js";
 
 let handle: ServerHandle | null = null;
@@ -193,6 +196,61 @@ describe("POST /bitrix/", () => {
     ).rejects.toThrow();
 
     expect(handleWebhook).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/config — secret masking", () => {
+  const tmpConfigPath = path.join(os.tmpdir(), `betsy-test-config-${Date.now()}.yaml`);
+  let prevPath: string | undefined;
+
+  beforeAll(() => {
+    prevPath = process.env.BETSY_CONFIG_PATH;
+    fs.writeFileSync(
+      tmpConfigPath,
+      [
+        "agent:",
+        "  name: Test",
+        "llm:",
+        "  provider: openrouter",
+        "  api_key: sk-secret-llm-key",
+        "telegram:",
+        "  token: tg-secret-token",
+        "bitrix:",
+        '  webhook_url: "https://p.bitrix24.ru/rest/6/verysecrettoken123/"',
+        '  application_token: "app-secret-token-xyz"',
+        "",
+      ].join("\n"),
+    );
+    process.env.BETSY_CONFIG_PATH = tmpConfigPath;
+  });
+
+  afterAll(() => {
+    if (prevPath === undefined) delete process.env.BETSY_CONFIG_PATH;
+    else process.env.BETSY_CONFIG_PATH = prevPath;
+    fs.rmSync(tmpConfigPath, { force: true });
+  });
+
+  it("does not leak the bitrix webhook url or application token", async () => {
+    handle = createServer({ port: 0 });
+    const addr = handle.server.address() as { port: number };
+
+    const res = await fetch(`http://localhost:${addr.port}/api/config`);
+    expect(res.status).toBe(200);
+
+    const bodyText = await res.text();
+    // The webhook URL carries the portal access token in its path
+    // (…/rest/<user>/<token>/) — a raw copy anywhere in the response is a leak.
+    expect(bodyText).not.toContain("verysecrettoken123");
+    expect(bodyText).not.toContain("app-secret-token-xyz");
+    // Sanity: other already-masked secrets stay masked too (regression guard).
+    expect(bodyText).not.toContain("sk-secret-llm-key");
+    expect(bodyText).not.toContain("tg-secret-token");
+
+    const body = JSON.parse(bodyText) as { bitrix?: { webhook_url?: string; application_token?: string } };
+    expect(body.bitrix?.webhook_url).toBeTruthy();
+    expect(body.bitrix?.webhook_url).not.toBe("https://p.bitrix24.ru/rest/6/verysecrettoken123/");
+    expect(body.bitrix?.application_token).toBeTruthy();
+    expect(body.bitrix?.application_token).not.toBe("app-secret-token-xyz");
   });
 });
 

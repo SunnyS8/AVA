@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { BitrixChannel } from "../../src/channels/bitrix/index.js";
 
-function body(opts: { token?: string; text?: string; author?: string } = {}) {
+function body(opts: { token?: string; text?: string; author?: string; chatType?: string } = {}) {
   const p = new URLSearchParams();
   p.set("event", "ONIMBOTMESSAGEADD");
   p.set("data[PARAMS][DIALOG_ID]", "chat42");
@@ -9,6 +9,7 @@ function body(opts: { token?: string; text?: string; author?: string } = {}) {
   p.set("data[PARAMS][MESSAGE]", opts.text ?? "привет");
   p.set("auth[application_token]", opts.token ?? "tok");
   if (opts.author) p.set("data[PARAMS][AUTHOR_ID]", opts.author);
+  if (opts.chatType !== undefined) p.set("data[PARAMS][CHAT_TYPE]", opts.chatType);
   return p.toString();
 }
 
@@ -79,6 +80,35 @@ describe("BitrixChannel", () => {
     const { ch, sent } = makeChannel();
     ch.onMessage(async () => ({ text: "ответ" }));
     ch.handleWebhook(body({ author: "17" }));
+    await ch.idle();
+    expect(sent).toEqual([{ dialogId: "chat42", text: "ответ" }]);
+  });
+
+  it("ignores group chats (CHAT_TYPE=C) — spec says private dialogs only", async () => {
+    const { ch, sent } = makeChannel();
+    const asked = vi.fn().mockResolvedValue({ text: "ответ" });
+    ch.onMessage(asked);
+    const res = ch.handleWebhook(body({ chatType: "C" }));
+    expect(res.status).toBe(200);
+    await ch.idle();
+    expect(asked).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+  });
+
+  it("answers a private dialog (CHAT_TYPE=P)", async () => {
+    const { ch, sent } = makeChannel();
+    ch.onMessage(async () => ({ text: "ответ" }));
+    const res = ch.handleWebhook(body({ chatType: "P" }));
+    expect(res.status).toBe(200);
+    await ch.idle();
+    expect(sent).toEqual([{ dialogId: "chat42", text: "ответ" }]);
+  });
+
+  it("answers when CHAT_TYPE is absent — defaults to private, not silence", async () => {
+    const { ch, sent } = makeChannel();
+    ch.onMessage(async () => ({ text: "ответ" }));
+    const res = ch.handleWebhook(body());
+    expect(res.status).toBe(200);
     await ch.idle();
     expect(sent).toEqual([{ dialogId: "chat42", text: "ответ" }]);
   });

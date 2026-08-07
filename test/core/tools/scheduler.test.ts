@@ -21,7 +21,7 @@ afterEach(() => {
 
 describe("SchedulerService", () => {
   it("adds an 'at' task via tool", async () => {
-    scheduler.setMessageContext("telegram", "42", []);
+    scheduler.setMessageContext("42", "telegram", "42", []);
     const tool = scheduler.tool;
     const result = await tool.execute({
       action: "add", name: "reminder",
@@ -38,7 +38,7 @@ describe("SchedulerService", () => {
   });
 
   it("adds a 'cron' task via tool (backward compat)", async () => {
-    scheduler.setMessageContext("telegram", "1", []);
+    scheduler.setMessageContext("1", "telegram", "1", []);
     const result = await scheduler.tool.execute({
       action: "add", name: "daily",
       cron_expression: "0 20 * * *",
@@ -52,7 +52,7 @@ describe("SchedulerService", () => {
   });
 
   it("adds an 'every' task", async () => {
-    scheduler.setMessageContext("browser", "ws-1", []);
+    scheduler.setMessageContext("ws-1", "browser", "ws-1", []);
     const result = await scheduler.tool.execute({
       action: "add", name: "check-site",
       schedule_type: "every", every: "30m",
@@ -65,7 +65,7 @@ describe("SchedulerService", () => {
   });
 
   it("lists tasks", async () => {
-    scheduler.setMessageContext("telegram", "1", []);
+    scheduler.setMessageContext("1", "telegram", "1", []);
     await scheduler.tool.execute({
       action: "add", name: "t1", schedule_type: "at", at: "+5m", command: "a",
     });
@@ -75,7 +75,7 @@ describe("SchedulerService", () => {
   });
 
   it("removes a task by name", async () => {
-    scheduler.setMessageContext("telegram", "1", []);
+    scheduler.setMessageContext("1", "telegram", "1", []);
     await scheduler.tool.execute({
       action: "add", name: "to-remove", schedule_type: "at", at: "+5m", command: "x",
     });
@@ -85,7 +85,7 @@ describe("SchedulerService", () => {
   });
 
   it("captures conversation context", async () => {
-    scheduler.setMessageContext("telegram", "1", [
+    scheduler.setMessageContext("1", "telegram", "1", [
       { role: "user", content: "Надо задеплоить проект" },
       { role: "assistant", content: "Окей, когда?" },
       { role: "user", content: "Напомни через 5 минут" },
@@ -102,7 +102,7 @@ describe("SchedulerService", () => {
   it("fires due tasks and calls callback", async () => {
     const fired: string[] = [];
     scheduler.onTaskFire((task) => { fired.push(task.name); });
-    scheduler.setMessageContext("telegram", "1", []);
+    scheduler.setMessageContext("1", "telegram", "1", []);
 
     // Add task and manually set it to past via store
     await scheduler.tool.execute({
@@ -124,7 +124,7 @@ describe("SchedulerService", () => {
   it("advances nextRunAt for 'every' tasks after fire", async () => {
     const fired: string[] = [];
     scheduler.onTaskFire((task) => { fired.push(task.name); });
-    scheduler.setMessageContext("telegram", "1", []);
+    scheduler.setMessageContext("1", "telegram", "1", []);
 
     await scheduler.tool.execute({
       action: "add", name: "repeater",
@@ -148,7 +148,7 @@ describe("SchedulerService", () => {
   it("recoverMissed executes missed one-shot and skips recurring", async () => {
     const fired: string[] = [];
     scheduler.onTaskFire((task) => { fired.push(task.name); });
-    scheduler.setMessageContext("telegram", "1", []);
+    scheduler.setMessageContext("1", "telegram", "1", []);
 
     // Add one-shot task in the past (manually via store)
     const now = Date.now();
@@ -176,6 +176,48 @@ describe("SchedulerService", () => {
     expect(remaining).toHaveLength(1);
     expect(remaining[0].name).toBe("missed-recurring");
     expect(remaining[0].nextRunAt).toBeGreaterThan(now);
+  });
+
+  it("keeps each user's channel/chatId isolated when dialogs interleave", async () => {
+    // Simulates the Bitrix queue running two dialogs concurrently: user A's
+    // context is set, then — while A's engine turn is still "in flight" —
+    // user B's message arrives and sets ITS context too, before A's turn
+    // reaches the scheduler tool. With a single mutable field this overwrites
+    // A's context; keyed by userId, each stays put.
+    scheduler.setMessageContext("userA", "bitrix", "dialogA", [
+      { role: "user", content: "Напомни мне про отчёт" },
+    ]);
+    scheduler.setMessageContext("userB", "telegram", "chatB", [
+      { role: "user", content: "Напомни мне про звонок" },
+    ]);
+
+    // A's turn finally calls the scheduler tool — with A's own _userId, as
+    // Engine.executeTool injects it (src/core/engine.ts).
+    const resultA = await scheduler.tool.execute({
+      action: "add", name: "task-a",
+      schedule_type: "at", at: "+5m", command: "отчёт",
+      _userId: "userA",
+    });
+    expect(resultA.success).toBe(true);
+
+    const resultB = await scheduler.tool.execute({
+      action: "add", name: "task-b",
+      schedule_type: "at", at: "+5m", command: "звонок",
+      _userId: "userB",
+    });
+    expect(resultB.success).toBe(true);
+
+    const tasks = store.list();
+    const taskA = tasks.find((t) => t.name === "task-a")!;
+    const taskB = tasks.find((t) => t.name === "task-b")!;
+
+    expect(taskA.channel).toBe("bitrix");
+    expect(taskA.chatId).toBe("dialogA");
+    expect(taskA.context).toContain("отчёт");
+
+    expect(taskB.channel).toBe("telegram");
+    expect(taskB.chatId).toBe("chatB");
+    expect(taskB.context).toContain("звонок");
   });
 });
 

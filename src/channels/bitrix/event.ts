@@ -11,6 +11,13 @@ export interface BitrixEvent {
    * guarding the one thing that must not fail — the anti-loop check.
    */
   authorId: string;
+  /**
+   * Raw CHAT_TYPE as sent by the portal: "P" for a private (one-on-one)
+   * dialog, "C" for a group chat. Empty string when the field is absent.
+   * The parser reports it and judges nothing — same rule as authorId,
+   * deciding what to do about it belongs to the channel.
+   */
+  chatType: string;
 }
 
 /**
@@ -36,5 +43,6 @@ export function parseBitrixEvent(body: string): BitrixEvent | null {
     text: p("MESSAGE"),
     applicationToken: params.get("auth[application_token]") ?? "",
     authorId: p("AUTHOR_ID"),
+    chatType: p("CHAT_TYPE"),
   };
 }
