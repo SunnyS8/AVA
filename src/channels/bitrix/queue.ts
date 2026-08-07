@@ -14,7 +14,15 @@ export class DialogQueue {
     this.chains.set(dialogId, next);
   }
 
-  /** Resolves once every queued job has settled. Used by tests. */
+  /**
+   * Resolves once every job queued AT THE MOMENT OF THE CALL has settled.
+   *
+   * The chain map is read once: a job enqueued while we are waiting is not
+   * awaited. That is enough for the webhook path, where jobs are only ever
+   * queued from the top level, and for tests. It is NOT enough as a general
+   * "drain everything" primitive — a shutdown that must not lose work needs
+   * to stop accepting new jobs first.
+   */
   async idle(): Promise<void> {
     await Promise.all([...this.chains.values()]);
   }
