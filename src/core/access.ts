@@ -13,14 +13,19 @@ export type AccessLevel = "owner" | "restricted";
  * tomorrow is unreachable for strangers until someone deliberately puts it
  * here. Forgetting must fail closed.
  */
+// Deliberately absent: "http" and "browser". Both take a URL from the caller
+// with no host or protocol check, so a stranger could point them at Ava's own
+// panel on 127.0.0.1:3777, at cloud metadata, or at anything inside the
+// server's network — the same key leak we are closing here, over the network
+// instead of the filesystem. They can return once those tools validate the
+// target; the pattern already exists in src/multi/agents/tools/fetch-url-tool.ts
+// (isBlockedHost / isBlockedUrl).
 export const SAFE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "memory",
   "web",
-  "browser",
   "image_gen",
   "selfie",
   "video_message",
-  "http",
   "skill_search",
 ]);
 

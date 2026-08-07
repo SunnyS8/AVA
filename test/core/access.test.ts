@@ -21,6 +21,14 @@ describe("access levels", () => {
     }
   });
 
+  it("keeps a stranger away from arbitrary network destinations", () => {
+    // http и browser принимают адрес от собеседника без проверки: через них
+    // достаётся панель Авы на 127.0.0.1:3777 и внутренняя сеть сервера
+    expect(isToolAllowed("http", "restricted")).toBe(false);
+    expect(isToolAllowed("browser", "restricted")).toBe(false);
+    expect(isToolAllowed("http", "owner")).toBe(true);
+  });
+
   it("denies an UNKNOWN tool to a restricted caller — default is deny", () => {
     // Новый инструмент, добавленный завтра, не должен стать доступен всем
     // просто потому, что о нём забыли.
