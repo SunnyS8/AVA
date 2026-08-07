@@ -48,4 +48,33 @@ describe("BitrixClient", () => {
     await expect(c.sendMessage("chat1", "hi")).rejects.toThrow(/500/);
     await expect(c.sendMessage("chat1", "hi")).rejects.not.toThrow(/supersecret/);
   });
+
+  it("keeps the webhook secret out of the error when fetch itself throws", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(
+      new TypeError("Failed to parse URL from https://p.bitrix24.ru/rest/6/supersecret/imbot.message.add.json"),
+    );
+    const c = new BitrixClient("https://p.bitrix24.ru/rest/6/supersecret/", "42", fetchMock as unknown as typeof fetch);
+    await expect(c.sendMessage("chat1", "hi")).rejects.not.toThrow(/supersecret/);
+  });
+
+  it("treats an error field in a 200 response as a failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => JSON.stringify({ error: "BOT_ID_NOT_FOUND", error_description: "no such bot" }),
+    });
+    const c = new BitrixClient("https://p.bitrix24.ru/rest/6/secret/", "42", fetchMock as unknown as typeof fetch);
+    await expect(c.sendMessage("chat1", "hi")).rejects.toThrow(/BOT_ID_NOT_FOUND/);
+  });
+
+  it("accepts a normal successful answer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => JSON.stringify({ result: 123 }) });
+    const c = new BitrixClient("https://p.bitrix24.ru/rest/6/secret/", "42", fetchMock as unknown as typeof fetch);
+    await expect(c.sendMessage("chat1", "hi")).resolves.toBeUndefined();
+  });
+
+  it("does not cut an emoji in half when clipping", () => {
+    const out = clip("😀".repeat(20), 11);
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(out).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  });
 });
