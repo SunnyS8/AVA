@@ -1,4 +1,5 @@
 import { buildPersonalityPrompt } from "./personality.js";
+import type { AccessLevel } from "./access.js";
 
 export interface PromptConfig {
   name: string;
@@ -40,6 +41,7 @@ export function buildSystemPrompt(
   userMessage?: string,
   chatId?: string,
   connectedServices?: string[],
+  access: AccessLevel = "owner",
 ): string {
   const name = config.name || "Betsy";
   const gender = config.gender ?? "female";
@@ -83,8 +85,8 @@ ${genderBlock}
     prompt += `\n\n## Личность\n\n${personalityParts.join("\n")}`;
   }
 
-  // Owner info
-  if (config.owner) {
+  // Owner info — never leaked to a restricted (non-owner) conversation.
+  if (config.owner && access !== "restricted") {
     const o = config.owner;
     const parts: string[] = [];
     if (o.name) {

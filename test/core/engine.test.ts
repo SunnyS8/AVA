@@ -117,12 +117,15 @@ describe("Engine", () => {
     const llm = { fast: () => ({ chat: chatMock }), strong: () => ({ chat: chatMock }) };
     const engine = new Engine({ llm, config: testConfig, tools, contextBudget: 40000 });
 
+    // This test is about param injection mechanics, not access policy — the
+    // "recorder" tool it registers isn't on the safe list, so it needs
+    // owner-level access to actually execute (see src/core/access.ts).
     await engine.process({
       channelName: "bitrix",
       userId: "employee-7",
       text: "connect google",
       timestamp: Date.now(),
-    });
+    }, undefined, "owner");
 
     expect(seenParams).toHaveLength(1);
     expect(seenParams[0]._userId).toBe("employee-7");

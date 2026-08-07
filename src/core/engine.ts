@@ -3,6 +3,7 @@ import type { LLMClient, LLMMessage, ContentPart, ToolDefinition } from "./llm/t
 import type { ToolRegistry } from "./tools/registry.js";
 import type { ToolResult } from "./tools/types.js";
 import { buildSystemPrompt, type PromptConfig } from "./prompt.js";
+import { type AccessLevel, filterTools, isToolAllowed } from "./access.js";
 import { searchKnowledge } from "./memory/knowledge.js";
 import { saveMessage, loadHistory, extractText } from "./memory/conversations.js";
 import { compactHistory } from "./memory/compaction.js";
@@ -77,7 +78,7 @@ export class Engine {
       }));
   }
 
-  async process(msg: IncomingMessage, onProgress?: ProgressCallback): Promise<OutgoingMessage> {
+  async process(msg: IncomingMessage, onProgress?: ProgressCallback, access: AccessLevel = "restricted"): Promise<OutgoingMessage> {
     const llm = this.deps.llm.fast();
     const userId = msg.userId;
 
@@ -101,7 +102,7 @@ export class Engine {
     };
 
     // Build system prompt with memory context
-    let systemPrompt = this.buildPromptWithMemory(msg.text, userId);
+    let systemPrompt = this.buildPromptWithMemory(msg.text, userId, access);
 
     // Add user message (with reply context and/or images if present)
     const replyTo = msg.metadata?.replyToText as string | undefined;
@@ -124,8 +125,9 @@ export class Engine {
 
     saveMessage(userId, msg.channelName, "user", textContent);
 
-    // Build tool definitions for the LLM
-    const tools = this.buildToolDefinitions();
+    // Build tool definitions for the LLM — filtered by access so a restricted
+    // caller never even sees shell/files/ssh in the request to the model.
+    const tools = this.buildToolDefinitions(access);
 
     try {
       let lastMediaUrl: string | undefined;
@@ -225,7 +227,7 @@ export class Engine {
           this.histories.set(userId, m);
           history = m;
           if (s) this.summaries.set(userId, s);
-          systemPrompt = this.buildPromptWithMemory(msg.text, userId);
+          systemPrompt = this.buildPromptWithMemory(msg.text, userId, access);
           continue;
         }
 
@@ -242,7 +244,7 @@ export class Engine {
           onProgress?.({ type: "tool_start", tool: tc.name, turn: turn + 1 });
 
           const toolStart = Date.now();
-          const result = await this.executeTool(tc.name, tc.arguments, userId, msg.channelName);
+          const result = await this.executeTool(tc.name, tc.arguments, access, userId, msg.channelName);
           const toolMs = Date.now() - toolStart;
 
           let resultText = result.success
@@ -356,7 +358,7 @@ export class Engine {
   }
 
   /** Build system prompt and inject relevant memory context. */
-  private buildPromptWithMemory(userMessage: string, chatId: string): string {
+  private buildPromptWithMemory(userMessage: string, chatId: string, access: AccessLevel): string {
     let connectedServiceNames: string[] = [];
     if (this.deps.encryptionKey) {
       try {
@@ -369,19 +371,23 @@ export class Engine {
       } catch {}
     }
 
-    let prompt = buildSystemPrompt(this.deps.config, userMessage, chatId, connectedServiceNames);
+    let prompt = buildSystemPrompt(this.deps.config, userMessage, chatId, connectedServiceNames, access);
 
-    // Search knowledge base for context relevant to the user's message
-    try {
-      const hits = searchKnowledge(userMessage, 5);
-      if (hits.length > 0) {
-        const memoryContext = hits
-          .map((h, i) => `${i + 1}. [${h.topic}] ${h.insight}`)
-          .join("\n");
-        prompt += `\n\n## Релевантные знания из памяти\n\n${memoryContext}`;
+    // Search knowledge base for context relevant to the user's message.
+    // Owner-only: this is the owner's personal memory and must not leak
+    // into a conversation with someone else.
+    if (access === "owner") {
+      try {
+        const hits = searchKnowledge(userMessage, 5);
+        if (hits.length > 0) {
+          const memoryContext = hits
+            .map((h, i) => `${i + 1}. [${h.topic}] ${h.insight}`)
+            .join("\n");
+          prompt += `\n\n## Релевантные знания из памяти\n\n${memoryContext}`;
+        }
+      } catch {
+        // Memory not initialized yet — skip
       }
-    } catch {
-      // Memory not initialized yet — skip
     }
 
     // Inject installed skills context
@@ -420,7 +426,15 @@ export class Engine {
   }
 
   /** Execute a single tool by name. Returns full ToolResult. */
-  private async executeTool(name: string, args: Record<string, unknown>, userId?: string, channelName?: string): Promise<ToolResult> {
+  private async executeTool(name: string, args: Record<string, unknown>, access: AccessLevel, userId?: string, channelName?: string): Promise<ToolResult> {
+    // Checked again here, not just at the point where tools are shown to the
+    // model: the model can call a tool it was never offered — from memory,
+    // stale context, or a hint from the person it's talking to. The list we
+    // send with the request is not the enforcement boundary; this is.
+    if (!isToolAllowed(name, access)) {
+      return { success: false, output: "", error: "Этот инструмент мне здесь недоступен." };
+    }
+
     const tool = this.deps.tools.get(name);
     if (!tool) {
       return { success: false, output: "", error: `unknown tool "${name}"` };
@@ -439,9 +453,9 @@ export class Engine {
     }
   }
 
-  /** Convert our ToolParam[] format to OpenAI function-calling ToolDefinition[]. */
-  private buildToolDefinitions(): ToolDefinition[] {
-    return this.deps.tools.list().map((tool) => ({
+  /** Convert our ToolParam[] format to OpenAI function-calling ToolDefinition[], filtered by access. */
+  private buildToolDefinitions(access: AccessLevel): ToolDefinition[] {
+    return filterTools(this.deps.tools.list(), access).map((tool) => ({
       type: "function" as const,
       function: {
         name: tool.name,
