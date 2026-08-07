@@ -2,10 +2,12 @@ import type { IncomingMessage, OutgoingMessage } from "../../core/types.js";
 import type { MessageHandler } from "../types.js";
 import { resolveProfile, type ProfilesConfig, type UserProfile } from "../../core/profiles.js";
 import type { RateLimiter } from "../../core/limits.js";
+import type { AccessLevel } from "../../core/access.js";
 
 export interface BitrixHandlerDeps {
-  /** Calls the engine. Profile is passed so the core can adapt its answer. */
-  ask: (msg: IncomingMessage, profile: UserProfile) => Promise<OutgoingMessage>;
+  /** Calls the engine. Profile is passed so the core can adapt its answer;
+   *  access is computed here at the channel boundary and carried in. */
+  ask: (msg: IncomingMessage, profile: UserProfile, access: AccessLevel) => Promise<OutgoingMessage>;
   profiles: ProfilesConfig | undefined;
   limiter: RateLimiter;
 }
@@ -31,6 +33,10 @@ export function buildBitrixHandler(deps: BitrixHandlerDeps): MessageHandler {
       };
     }
 
-    return deps.ask(msg, profile);
+    // Access is computed from the resolved role, not trusted from the
+    // message: only the owner's own portal identity gets "owner", every
+    // other role (analyst, marketing, plain employee) is "restricted".
+    const access: AccessLevel = profile.role === "owner" ? "owner" : "restricted";
+    return deps.ask(msg, profile, access);
   };
 }

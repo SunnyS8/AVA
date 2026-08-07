@@ -31,6 +31,7 @@ import { SkillInstallTool } from "./core/tools/skill-install.js";
 import { SendFileTool } from "./core/tools/send-file.js";
 import { ConnectServiceTool } from "./core/tools/connect-service.js";
 import { buildConnectNotifyHandler } from "./channels/connect-notify.js";
+import { computeTelegramAccess } from "./channels/telegram/access.js";
 import { pickEntry } from "./mode.js";
 
 function getAddress(): string {
@@ -189,7 +190,7 @@ async function main() {
       const bitrixChannel = new BitrixChannel();
       bitrixChannel.onMessage(
         buildBitrixHandler({
-          ask: async (msg) => {
+          ask: async (msg, _profile, access) => {
             if (!engine) return { text: "Я сейчас не могу ответить — модель не подключена." };
             // Same order as the Telegram wiring below: the scheduler must know
             // where to answer before the engine starts thinking. Keyed by
@@ -197,7 +198,7 @@ async function main() {
             // different dialogs in parallel) don't clobber each other's
             // context — see the Map in SchedulerService.
             scheduler.setMessageContext(msg.userId, msg.channelName, msg.userId, engine.getHistory(msg.userId) ?? []);
-            return engine.process(msg);
+            return engine.process(msg, undefined, access);
           },
           profiles: config.profiles,
           limiter,
@@ -252,13 +253,24 @@ async function main() {
       };
       telegram.onMessage(async (msg, onProgress) => {
         if (engine) {
+          // Access is computed from who actually sent the message
+          // (msg.userId, keyed by sender — see resolveTelegramIds in
+          // channels/telegram/handlers.ts), compared against the configured
+          // owner. This is what makes public mode safe: a stranger in a
+          // group or DM gets exactly the restricted tools an employee gets
+          // in the portal, never the owner's.
+          const access = computeTelegramAccess(msg.userId, config.telegram!.owner_id);
+          // chatId (falls back to userId in a 1:1 chat) is the address a
+          // scheduled task must reply into later — kept separate from the
+          // sender-keyed userId above so a group reminder doesn't get sent
+          // to whichever member happened to create it.
           scheduler.setMessageContext(
             msg.userId,
             msg.channelName,
-            msg.userId,
+            msg.chatId ?? msg.userId,
             engine.getHistory(msg.userId) ?? [],
           );
-          return engine.process(msg, onProgress);
+          return engine.process(msg, onProgress, access);
         }
         return { text: "LLM не настроен. Открой дашборд для настройки." };
       });
@@ -325,13 +337,18 @@ async function main() {
       ].join("\n");
 
       try {
+        // Deliberately "restricted", not "owner": a scheduled task can have
+        // been created by anyone who once talked to the scheduler tool —
+        // ScheduledTaskRow has no creator field, so there is currently no
+        // way to recover who that was when the task fires later. Do not
+        // "fix" this to "owner" without first adding that tracking.
         const result = await engine.process({
           channelName: task.channel,
           userId: task.chatId,
           text: prompt,
           timestamp: Date.now(),
           metadata: { scheduledTask: true },
-        });
+        }, undefined, "restricted");
         await channel.send(task.chatId, result);
         console.log(`✅ Scheduler: delivered "${task.name}" to ${task.channel}:${task.chatId}`);
       } catch (err) {

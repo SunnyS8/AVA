@@ -301,6 +301,29 @@ async function downloadPhotoBase64(ctx: Context, photo: { file_id: string }[], b
   }
 }
 
+/**
+ * Resolve who sent the message vs. where a reply must go.
+ *
+ * `userId` keys history, profile and access — it must identify the SENDER.
+ * Keying it by chat instead (the old behaviour) is harmless in a 1:1 chat,
+ * but in a GROUP chat with public mode on, it means everyone in the group
+ * shares one `userId`: a stranger would see the owner's past messages and
+ * tool results, and get the owner's access level. `chatId` is the address
+ * a reply must go to and stays chat-based regardless.
+ *
+ * Both fall back to the other when one is missing — should not happen with
+ * a real Telegram update, but keeps the function total.
+ */
+export function resolveTelegramIds(
+  chatId: number | undefined,
+  fromId: number | undefined,
+): { userId: string; chatId: string } {
+  return {
+    userId: String(fromId ?? chatId ?? "unknown"),
+    chatId: String(chatId ?? fromId ?? "unknown"),
+  };
+}
+
 /** Convert a grammY Context into a channel-neutral IncomingMessage. */
 async function toIncoming(ctx: Context, text: string, botToken: string): Promise<IncomingMessage> {
   const reply = ctx.message?.reply_to_message;
@@ -319,9 +342,12 @@ async function toIncoming(ctx: Context, text: string, botToken: string): Promise
     if (b64) images.push(b64);
   }
 
+  const { userId, chatId } = resolveTelegramIds(ctx.chat?.id, ctx.from?.id);
+
   return {
     channelName: "telegram",
-    userId: String(ctx.chat?.id ?? ctx.from?.id ?? "unknown"),
+    userId,
+    chatId,
     text,
     timestamp: Date.now(),
     metadata: {

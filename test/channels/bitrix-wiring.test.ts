@@ -46,4 +46,39 @@ describe("buildBitrixHandler", () => {
     await h(msg("1"));
     expect(ask.mock.calls[0][1]).toMatchObject({ role: "owner", unlimited: true });
   });
+
+  it("gives the owner's own profile owner-level access", async () => {
+    const ask = vi.fn().mockResolvedValue({ text: "ответ" });
+    const h = buildBitrixHandler({ ask, profiles, limiter: new RateLimiter(9, 99, () => 0) });
+    await h(msg("1")); // "1" == profiles.owner_id
+    expect(ask.mock.calls[0][1]).toMatchObject({ role: "owner" });
+    expect(ask.mock.calls[0][2]).toBe("owner");
+  });
+
+  it("restricts a rank-and-file employee's access", async () => {
+    const ask = vi.fn().mockResolvedValue({ text: "ответ" });
+    const h = buildBitrixHandler({ ask, profiles, limiter: new RateLimiter(9, 99, () => 0) });
+    await h(msg("999")); // not in owner_id or any role list => plain employee
+    expect(ask.mock.calls[0][1]).toMatchObject({ role: "employee" });
+    expect(ask.mock.calls[0][2]).toBe("restricted");
+  });
+
+  it("restricts every non-owner role, not just plain employees", async () => {
+    const rolesProfiles = {
+      ...profiles,
+      analyst_ids: ["10"],
+      marketing_head_ids: ["20"],
+      marketing_specialist_ids: ["30"],
+    };
+    const ask = vi.fn().mockResolvedValue({ text: "ответ" });
+    const h = buildBitrixHandler({ ask, profiles: rolesProfiles, limiter: new RateLimiter(99, 999, () => 0) });
+
+    for (const id of ["10", "20", "30"]) {
+      await h(msg(id));
+    }
+
+    expect(ask.mock.calls[0][2]).toBe("restricted"); // analyst
+    expect(ask.mock.calls[1][2]).toBe("restricted"); // marketing_head
+    expect(ask.mock.calls[2][2]).toBe("restricted"); // marketing_specialist
+  });
 });

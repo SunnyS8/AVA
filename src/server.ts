@@ -725,12 +725,15 @@ async function handleChatSend(
       return;
     }
 
+    // Owner-level access: the panel sits behind handleAuth's password/JWT
+    // check above (see PUBLIC_ROUTES / isPublicRoute), so whoever reached
+    // this handler already authenticated as the owner.
     const result = await ctx.engine.process({
       channelName: "browser",
       userId: BROWSER_USER_ID,
       text: body.message.trim(),
       timestamp: Date.now(),
-    });
+    }, undefined, "owner");
 
     json(res, { reply: result.text, mediaUrl: result.mediaUrl });
   } catch (err) {

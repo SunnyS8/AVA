@@ -2,7 +2,7 @@ import type { Tool, ToolResult } from "./types.js";
 import { listServices, getService, type ServiceDefinition } from "../../services/catalog.js";
 import { TokenStore } from "../../services/tokens.js";
 
-export type OnConnectedCallback = (userId: string, service: ServiceDefinition, scopes: string[], channelName: string) => void;
+export type OnConnectedCallback = (userId: string, service: ServiceDefinition, scopes: string[], channelName: string, chatId: string) => void;
 
 export interface ConnectServiceConfig {
   encryptionKey: string;
@@ -40,10 +40,16 @@ export class ConnectServiceTool implements Tool {
     // messages may have been processed — still points at the channel THIS
     // particular connect request came from.
     const channelName = String(params._channelName ?? "");
+    // Injected by Engine.executeTool from the incoming message's chatId —
+    // the address a reply must go to. Distinct from `userId` (the sender):
+    // in a group chat they diverge, and it's the OAuth-poll callback below
+    // that needs the chat, not the person who happened to type /connect.
+    // Falls back to userId for channels with no separate chat concept.
+    const chatId = String(params._chatId ?? params._userId ?? "unknown");
 
     switch (action) {
       case "list": return this.handleList(userId);
-      case "connect": return this.handleConnect(params, userId, channelName);
+      case "connect": return this.handleConnect(params, userId, channelName, chatId);
       case "disconnect": return this.handleDisconnect(params, userId);
       case "status": return this.handleStatus(userId);
       default: return { success: false, output: `Неизвестное действие: "${action}". Используй: list, connect, disconnect, status` };
@@ -61,7 +67,7 @@ export class ConnectServiceTool implements Tool {
     return { success: true, output: `Доступные сервисы:\n\n${lines.join("\n")}` };
   }
 
-  private async handleConnect(params: Record<string, unknown>, userId: string, channelName: string): Promise<ToolResult> {
+  private async handleConnect(params: Record<string, unknown>, userId: string, channelName: string, chatId: string): Promise<ToolResult> {
     const serviceId = String(params.service ?? "").trim();
     if (!serviceId) return { success: false, output: "Укажи какой сервис подключить (параметр service)" };
 
@@ -107,7 +113,7 @@ export class ConnectServiceTool implements Tool {
 
           // Notify via callback (sends message to user's chat)
           if (this.onConnected) {
-            this.onConnected(userId, service, requestedScopes, channelName);
+            this.onConnected(userId, service, requestedScopes, channelName, chatId);
           }
         } else {
           console.log(`⚠️ OAuth: ${service.name} — авторизация не завершена для ${userId}`);

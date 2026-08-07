@@ -81,6 +81,11 @@ export class Engine {
   async process(msg: IncomingMessage, onProgress?: ProgressCallback, access: AccessLevel = "restricted"): Promise<OutgoingMessage> {
     const llm = this.deps.llm.fast();
     const userId = msg.userId;
+    // Address for out-of-band deliveries a tool triggers later (scheduler
+    // fire, connect_service's OAuth callback) — separate from `userId` so a
+    // group chat still gets the reply even though history is keyed by the
+    // sender. Falls back to userId for channels with no group/sender split.
+    const chatId = msg.chatId ?? userId;
 
     // Wait for any in-flight compaction to finish before proceeding
     const pending = this.compactionInFlight.get(userId);
@@ -244,7 +249,7 @@ export class Engine {
           onProgress?.({ type: "tool_start", tool: tc.name, turn: turn + 1 });
 
           const toolStart = Date.now();
-          const result = await this.executeTool(tc.name, tc.arguments, access, userId, msg.channelName);
+          const result = await this.executeTool(tc.name, tc.arguments, access, userId, msg.channelName, chatId);
           const toolMs = Date.now() - toolStart;
 
           let resultText = result.success
@@ -431,7 +436,7 @@ export class Engine {
   }
 
   /** Execute a single tool by name. Returns full ToolResult. */
-  private async executeTool(name: string, args: Record<string, unknown>, access: AccessLevel, userId?: string, channelName?: string): Promise<ToolResult> {
+  private async executeTool(name: string, args: Record<string, unknown>, access: AccessLevel, userId?: string, channelName?: string, chatId?: string): Promise<ToolResult> {
     // Checked again here, not just at the point where tools are shown to the
     // model: the model can call a tool it was never offered — from memory,
     // stale context, or a hint from the person it's talking to. The list we
@@ -452,6 +457,10 @@ export class Engine {
       // OAuth polling callback) remember which channel the request came from,
       // instead of guessing or broadcasting to every channel.
       if (channelName) params = { ...params, _channelName: channelName };
+      // Same reasoning as _channelName: connect_service's OAuth callback
+      // fires long after this turn ends and needs the chat to reply into,
+      // not just the sender who happened to trigger the connect.
+      if (chatId) params = { ...params, _chatId: chatId };
       return await tool.execute(params);
     } catch (err) {
       return { success: false, output: "", error: err instanceof Error ? err.message : String(err) };
