@@ -88,6 +88,17 @@ export class BitrixChannel implements Channel {
       return { status: 401 };
     }
 
+    // No sender, no processing. This isn't just "the field happened to be
+    // empty" — an empty fromUserId is also the key SchedulerService looks up
+    // per-user context by (setMessageContext/contextByUser in
+    // src/core/tools/scheduler.ts). A malformed or partial webhook missing
+    // FROM_USER_ID that lands while a real dialog is in flight would fall
+    // through to the scheduler's single-slot fallback and inherit whatever
+    // OTHER conversation's channel/chatId was set most recently — exactly
+    // the cross-dialog leak the per-user Map was built to close. There is
+    // also no one to answer, so refusing outright costs nothing.
+    if (!event.fromUserId) return { status: 200 };
+
     // Anti-loop. We compare against the id we registered the bot with, not a
     // guessed constant: this guard is the only thing standing between us and a
     // bot answering itself forever, and it must not rest on an assumption.

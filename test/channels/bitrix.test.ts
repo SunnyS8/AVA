@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { BitrixChannel } from "../../src/channels/bitrix/index.js";
 
-function body(opts: { token?: string; text?: string; author?: string; chatType?: string } = {}) {
+function body(opts: { token?: string; text?: string; author?: string; chatType?: string; fromUserId?: string } = {}) {
   const p = new URLSearchParams();
   p.set("event", "ONIMBOTMESSAGEADD");
   p.set("data[PARAMS][DIALOG_ID]", "chat42");
-  p.set("data[PARAMS][FROM_USER_ID]", "17");
+  p.set("data[PARAMS][FROM_USER_ID]", opts.fromUserId ?? "17");
   p.set("data[PARAMS][MESSAGE]", opts.text ?? "привет");
   p.set("auth[application_token]", opts.token ?? "tok");
   if (opts.author) p.set("data[PARAMS][AUTHOR_ID]", opts.author);
@@ -136,6 +136,17 @@ describe("BitrixChannel", () => {
     const asked = vi.fn().mockResolvedValue({ text: "ответ" });
     ch.onMessage(asked);
     const res = ch.handleWebhook(body({ text: "" }));
+    expect(res.status).toBe(200);
+    await ch.idle();
+    expect(asked).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+  });
+
+  it("ignores an event with no sender — an empty id would key the scheduler's context to the wrong dialog", async () => {
+    const { ch, sent } = makeChannel();
+    const asked = vi.fn().mockResolvedValue({ text: "ответ" });
+    ch.onMessage(asked);
+    const res = ch.handleWebhook(body({ fromUserId: "" }));
     expect(res.status).toBe(200);
     await ch.idle();
     expect(asked).not.toHaveBeenCalled();
