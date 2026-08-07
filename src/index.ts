@@ -4,6 +4,9 @@ import path from "node:path";
 import { createServer } from "./server.js";
 import { isConfigured, loadConfig, saveConfig, getAgentName, getPersonality, getPersonalitySliders, getLLMApiKey } from "./core/config.js";
 import { TelegramChannel } from "./channels/telegram/index.js";
+import { BitrixChannel } from "./channels/bitrix/index.js";
+import { buildBitrixHandler } from "./channels/bitrix/wiring.js";
+import { RateLimiter } from "./core/limits.js";
 import { LLMRouter } from "./core/llm/router.js";
 import { Engine } from "./core/engine.js";
 import { ToolRegistry } from "./core/tools/registry.js";
@@ -192,8 +195,40 @@ async function main() {
     encryptionKey: passwordHash,
   }) : null;
 
+  // Start Bitrix channel
+  let bitrix: BitrixChannel | null = null;
+  // bot_id появляется только после регистрации бота (задача 12): без него
+  // отправлять от имени Авы нечем, поэтому канал молча не поднимается.
+  if (config.bitrix?.webhook_url && config.bitrix?.application_token && config.bitrix?.bot_id) {
+    const limiter = new RateLimiter(
+      config.profiles?.limits.per_hour ?? 15,
+      config.profiles?.limits.per_day_total ?? 300,
+    );
+    bitrix = new BitrixChannel();
+    bitrix.onMessage(
+      buildBitrixHandler({
+        ask: async (msg) => {
+          if (!engine) return { text: "Я сейчас не могу ответить — модель не подключена." };
+          // Same order as the Telegram wiring (src/index.ts:214): the scheduler
+          // must know where to answer before the engine starts thinking.
+          scheduler.setMessageContext(msg.channelName, msg.userId, engine.getHistory(msg.userId) ?? []);
+          return engine.process(msg);
+        },
+        profiles: config.profiles,
+        limiter,
+      }),
+    );
+    await bitrix.start({
+      webhook_url: config.bitrix.webhook_url,
+      application_token: config.bitrix.application_token,
+      bot_id: config.bitrix.bot_id,
+    });
+    channels.set("bitrix", bitrix);
+    console.log("✅ Канал Битрикс запущен");
+  }
+
   // Start HTTP server
-  const { server, wss } = createServer({ port, engine: engine ?? undefined });
+  const { server, wss } = createServer({ port, engine: engine ?? undefined, bitrix: bitrix ?? undefined });
 
   // Start Telegram channel
   let telegram: TelegramChannel | null = null;
