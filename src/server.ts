@@ -210,6 +210,15 @@ function createRequestHandler(ctx: ServerContext, options: ServerOptions) {
 
     const url = new URL(req.url ?? "/", `http://localhost:${port}`);
 
+    if (url.pathname === "/health") {
+      // Public: proxied straight through by the nginx public block
+      // (deploy/nginx-ava-public.conf), no JWT possible here. Keep the body
+      // minimal — no config/state — this is the one route exposed to the
+      // open internet besides /bitrix/.
+      json(res, { status: "ok" });
+      return;
+    }
+
     if (url.pathname.startsWith("/bitrix/")) {
       // No JWT here on purpose: Bitrix cannot present one. Authenticity is
       // proven by the application token inside the event body.

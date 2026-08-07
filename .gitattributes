@@ -7,3 +7,8 @@
 # YAML-конфиги читаются на сервере — тоже держим LF
 *.yaml      text eol=lf
 *.yml       text eol=lf
+
+# nginx-конфиги и Node-скрипты деплоя тоже уходят на сервер/выполняются
+# напрямую — тот же класс граблей, что и *.sh
+*.conf      text eol=lf
+*.mjs       text eol=lf

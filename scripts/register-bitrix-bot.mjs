@@ -28,12 +28,22 @@ const body = {
   },
 };
 
-const res = await fetch(`${base}imbot.register.json`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(body),
-});
-const data = await res.json();
+let res;
+let data;
+try {
+  res = await fetch(`${base}imbot.register.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  data = await res.json();
+} catch (err) {
+  // err.message on a bad URL (e.g. TypeError: Failed to parse URL from ...)
+  // echoes the offending string back — which is the webhook with its secret
+  // token. Print only the exception type, never err.message.
+  console.error(`не удалось обратиться к порталу (${err.name}): проверьте адрес вебхука`);
+  process.exit(1);
+}
 
 if (!res.ok || data.error) {
   console.error(`регистрация не прошла: HTTP ${res.status} ${data.error ?? ""} ${data.error_description ?? ""}`);

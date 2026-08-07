@@ -195,3 +195,22 @@ describe("POST /bitrix/", () => {
     expect(handleWebhook).not.toHaveBeenCalled();
   });
 });
+
+describe("GET /health", () => {
+  it("answers 200 with a plain JSON body, not the SPA shell", async () => {
+    handle = createServer({ port: 0 });
+    const addr = handle.server.address() as { port: number };
+
+    const res = await fetch(`http://localhost:${addr.port}/health`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+
+    // The public nginx block (deploy/nginx-ava-public.conf) proxies this
+    // route straight to the open internet. If it ever fell through to
+    // serveStatic()'s SPA fallback, an outside caller would receive the
+    // control-panel's index.html — exactly what the stage rule forbids.
+    const text = await res.text();
+    expect(text).not.toContain("<html");
+    expect(JSON.parse(text)).toEqual({ status: "ok" });
+  });
+});

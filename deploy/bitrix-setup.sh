@@ -12,7 +12,7 @@ say() { echo ">> $*"; }
 say "Пакеты"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -yqq nginx certbot >/dev/null
+apt-get install -yqq nginx certbot curl >/dev/null
 
 say "Брандмауэр: открываю 80 и 443"
 ufw allow 80/tcp  >/dev/null
@@ -27,7 +27,7 @@ nginx -t
 systemctl reload nginx
 
 say "Сертификат Let's Encrypt"
-if [ ! -d "/etc/letsencrypt/live/$DOMAIN" ]; then
+if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
   certbot certonly --webroot -w /var/www/acme -d "$DOMAIN" \
     --non-interactive --agree-tos --register-unsafely-without-email
 else
