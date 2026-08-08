@@ -35,6 +35,16 @@ channels:
   max:
     enabled: false
 
+# Канал Битрикс24. Раскомментируйте и заполните своими значениями.
+# client_id/client_secret — со страницы приложения в портале; это секреты,
+# держите их только здесь и не выкладывайте в репозиторий.
+# bitrix:
+#   webhook_url: "https://ВАШ-ПОРТАЛ.bitrix24.ru/rest/1/YOUR_WEBHOOK_CODE/"
+#   application_token: YOUR_BITRIX_APPLICATION_TOKEN   # нужен только до установки приложения
+#   bot_id: "0"                                        # выдаётся scripts/register-bitrix-bot.mjs
+#   client_id: YOUR_BITRIX_CLIENT_ID
+#   client_secret: YOUR_BITRIX_CLIENT_SECRET
+
 plugins:
   voice:
     enabled: false

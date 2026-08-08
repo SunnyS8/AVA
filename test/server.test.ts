@@ -218,6 +218,8 @@ describe("GET /api/config — secret masking", () => {
         "bitrix:",
         '  webhook_url: "https://p.bitrix24.ru/rest/6/verysecrettoken123/"',
         '  application_token: "app-secret-token-xyz"',
+        '  client_id: "local.deadbeefcafe"',
+        '  client_secret: "client-secret-qwerty"',
         "",
       ].join("\n"),
     );
@@ -251,6 +253,24 @@ describe("GET /api/config — secret masking", () => {
     expect(body.bitrix?.webhook_url).not.toBe("https://p.bitrix24.ru/rest/6/verysecrettoken123/");
     expect(body.bitrix?.application_token).toBeTruthy();
     expect(body.bitrix?.application_token).not.toBe("app-secret-token-xyz");
+  });
+
+  it("does not leak the application keys", async () => {
+    // client_secret plus a refresh token mints portal access tokens at will.
+    // It arrived with the application support and was the one secret in this
+    // file left unmasked while its neighbours were covered — hence its own test.
+    handle = createServer({ port: 0 });
+    const addr = handle.server.address() as { port: number };
+
+    const res = await fetch(`http://localhost:${addr.port}/api/config`);
+    const bodyText = await res.text();
+
+    expect(bodyText).not.toContain("client-secret-qwerty");
+    expect(bodyText).not.toContain("local.deadbeefcafe");
+
+    const body = JSON.parse(bodyText) as { bitrix?: { client_id?: string; client_secret?: string } };
+    expect(body.bitrix?.client_secret).toBeTruthy();
+    expect(body.bitrix?.client_secret).not.toBe("client-secret-qwerty");
   });
 });
 

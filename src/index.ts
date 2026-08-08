@@ -5,7 +5,8 @@ import { createServer } from "./server.js";
 import { isConfigured, loadConfig, saveConfig, getAgentName, getPersonality, getPersonalitySliders, getLLMApiKey } from "./core/config.js";
 import { TelegramChannel } from "./channels/telegram/index.js";
 import { BitrixChannel } from "./channels/bitrix/index.js";
-import { buildBitrixHandler } from "./channels/bitrix/wiring.js";
+import { buildBitrixHandler, planBitrixStartup } from "./channels/bitrix/wiring.js";
+import { createBitrixTokenStore } from "./channels/bitrix/tokens.js";
 import { RateLimiter } from "./core/limits.js";
 import { LLMRouter } from "./core/llm/router.js";
 import { Engine } from "./core/engine.js";
@@ -181,58 +182,57 @@ async function main() {
 
   // Start Bitrix channel
   let bitrix: BitrixChannel | null = null;
-  // bot_id появляется только после регистрации бота (задача 12): без него
-  // отправлять от имени Авы нечем, поэтому канал молча не поднимается.
-  if (config.bitrix?.webhook_url && config.bitrix?.application_token && config.bitrix?.bot_id) {
-    try {
-      const limiter = new RateLimiter(
-        config.profiles?.limits.per_hour ?? 15,
-        config.profiles?.limits.per_day_total ?? 300,
-      );
-      const bitrixChannel = new BitrixChannel();
-      bitrixChannel.onMessage(
-        buildBitrixHandler({
-          ask: async (msg, _profile, access) => {
-            if (!engine) return { text: "Я сейчас не могу ответить — модель не подключена." };
-            // Same order as the Telegram wiring below: the scheduler must know
-            // where to answer before the engine starts thinking. Keyed by
-            // msg.userId so concurrent dialogs (the Bitrix queue runs
-            // different dialogs in parallel) don't clobber each other's
-            // context — see the Map in SchedulerService.
-            scheduler.setMessageContext(msg.userId, msg.channelName, msg.userId, engine.getHistory(msg.userId) ?? []);
-            return engine.process(msg, undefined, access);
-          },
-          profiles: config.profiles,
-          limiter,
-        }),
-      );
-      await bitrixChannel.start({
-        webhook_url: config.bitrix.webhook_url,
-        application_token: config.bitrix.application_token,
-        bot_id: config.bitrix.bot_id,
-      });
-      bitrix = bitrixChannel;
-      channels.set("bitrix", bitrix);
-      console.log("✅ Канал Битрикс запущен");
-    } catch (err) {
-      // A failed start must not take the whole process down with it (задача
-      // 12 adds real network calls to start() where this becomes reachable):
-      // `bitrix` stays null, createServer() gets `undefined`, and the rest of
-      // the app — Telegram included — starts normally.
-      console.error("❌ Канал Битрикс не поднялся, причина:", err instanceof Error ? err.message : err);
-      console.log("⚠️ Битрикс отключён на этот запуск, остальное работает как обычно");
-    }
-  } else if (config.bitrix) {
-    // config.bitrix exists but failed the guard above — say exactly why
-    // instead of just skipping silently. bot_id is the common case: it only
-    // shows up after scripts/register-bitrix-bot.mjs runs, and a numeric
-    // value now survives config parsing (z.coerce.string(), see
-    // src/core/config.ts) — so a missing channel at this point means the
-    // owner genuinely hasn't filled it in yet, not a parsing accident.
-    if (!config.bitrix.bot_id) {
-      console.log("⚠️ Канал Битрикс не поднят: нет bot_id — зарегистрируй бота (scripts/register-bitrix-bot.mjs) и впиши bot_id в конфиг");
-    } else {
-      console.log("⚠️ Канал Битрикс не поднят: не хватает webhook_url или application_token в конфиге");
+  if (config.bitrix) {
+    // Real store, in the config directory: an ONAPPINSTALL from the portal
+    // must land on disk, not in the "no token store configured" branch. It is
+    // also what tells the startup plan whether the install has already
+    // happened — the key it delivers never reaches the config.
+    const tokenStore = createBitrixTokenStore();
+    const plan = planBitrixStartup(config.bitrix, tokenStore.load() !== null);
+    console.log(`${plan.start ? "ℹ️" : "⚠️"} ${plan.message}`);
+    if (plan.start) {
+      try {
+        const limiter = new RateLimiter(
+          config.profiles?.limits.per_hour ?? 15,
+          config.profiles?.limits.per_day_total ?? 300,
+        );
+        const bitrixChannel = new BitrixChannel({ tokenStore });
+        bitrixChannel.onMessage(
+          buildBitrixHandler({
+            ask: async (msg, _profile, access) => {
+              if (!engine) return { text: "Я сейчас не могу ответить — модель не подключена." };
+              // Same order as the Telegram wiring below: the scheduler must know
+              // where to answer before the engine starts thinking. Keyed by
+              // msg.userId so concurrent dialogs (the Bitrix queue runs
+              // different dialogs in parallel) don't clobber each other's
+              // context — see the Map in SchedulerService.
+              scheduler.setMessageContext(msg.userId, msg.channelName, msg.userId, engine.getHistory(msg.userId) ?? []);
+              return engine.process(msg, undefined, access);
+            },
+            profiles: config.profiles,
+            limiter,
+          }),
+        );
+        // Empty string, not undefined: start() reports what is missing in
+        // Russian, and the catch below turns that into one clear line for the
+        // owner instead of a channel that half-works for an hour.
+        await bitrixChannel.start({
+          webhook_url: config.bitrix.webhook_url,
+          application_token: config.bitrix.application_token ?? "",
+          bot_id: config.bitrix.bot_id ?? "",
+          client_id: config.bitrix.client_id ?? "",
+          client_secret: config.bitrix.client_secret ?? "",
+        });
+        bitrix = bitrixChannel;
+        channels.set("bitrix", bitrix);
+        console.log("✅ Канал Битрикс запущен");
+      } catch (err) {
+        // A failed start must not take the whole process down with it:
+        // `bitrix` stays null, createServer() gets `undefined`, and the rest of
+        // the app — Telegram included — starts normally.
+        console.error("❌ Канал Битрикс не поднялся, причина:", err instanceof Error ? err.message : err);
+        console.log("⚠️ Битрикс отключён на этот запуск, остальное работает как обычно");
+      }
     }
   }
 
