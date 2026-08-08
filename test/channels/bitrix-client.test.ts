@@ -1,5 +1,66 @@
 import { describe, it, expect, vi } from "vitest";
 import { BitrixClient, clip } from "../../src/channels/bitrix/client.js";
+import type { BitrixTokens } from "../../src/channels/bitrix/tokens.js";
+
+const ACCESS = "access-token-secret";
+const REFRESH = "refresh-token-secret";
+const CLIENT_SECRET = "client-secret-secret";
+const HOUR = 3_600_000;
+
+function tokens(over: Partial<BitrixTokens> = {}): BitrixTokens {
+  return {
+    accessToken: ACCESS,
+    refreshToken: REFRESH,
+    expiresAt: Date.now() + HOUR,
+    domain: "example.bitrix24.ru",
+    memberId: "member-1",
+    ...over,
+  };
+}
+
+/** In-memory stand-in for BitrixTokenStore: same three methods, no disk. */
+function makeStore(initial: BitrixTokens | null = tokens()) {
+  const store = {
+    current: initial,
+    load: () => store.current,
+    save: vi.fn((t: BitrixTokens) => {
+      store.current = t;
+    }),
+    isExpired: (t: BitrixTokens, now: number = Date.now()) => now >= t.expiresAt - 60_000,
+  };
+  return store;
+}
+
+const FRESH: BitrixTokens = {
+  accessToken: "fresh-access",
+  refreshToken: "fresh-refresh",
+  expiresAt: Date.now() + HOUR,
+  domain: "example.bitrix24.ru",
+  memberId: "member-1",
+};
+
+function makeClient(
+  fetchMock: ReturnType<typeof vi.fn>,
+  store = makeStore(),
+  refreshImpl = vi.fn(async () => FRESH),
+) {
+  const client = new BitrixClient({
+    tokens: store,
+    botId: "42",
+    clientId: "local.app.id",
+    clientSecret: CLIENT_SECRET,
+    fetchImpl: fetchMock as unknown as typeof fetch,
+    refreshImpl: refreshImpl as never,
+  });
+  return { client, store, refreshImpl };
+}
+
+const okOnce = () => ({ ok: true, status: 200, text: async () => JSON.stringify({ result: 123 }) });
+const expiredOnce = () => ({
+  ok: false,
+  status: 401,
+  text: async () => JSON.stringify({ error: "expired_token", error_description: "The access token provided has expired" }),
+});
 
 describe("clip", () => {
   it("leaves a short text alone", () => {
@@ -17,59 +78,172 @@ describe("clip", () => {
 });
 
 describe("BitrixClient", () => {
-  it("sends as the bot, not as the webhook owner", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => "{}" });
-    const c = new BitrixClient("https://p.bitrix24.ru/rest/6/secret/", "42", fetchMock as unknown as typeof fetch);
-    await c.sendMessage("chat42", "привет");
+  it("calls the portal from the token store, authorised by the access token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okOnce());
+    const { client } = makeClient(fetchMock);
+    await client.sendMessage("chat42", "привет");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    // imbot.message.add — сообщение от имени бота. im.message.add отправил бы
-    // его от имени владельца вебхука, и сотрудники увидели бы живого человека.
-    expect(url).toBe("https://p.bitrix24.ru/rest/6/secret/imbot.message.add.json");
+    // Адрес строится из домена портала в хранилище, а не из вебхука: бот
+    // принадлежит приложению, и вебхук владельца тут больше ни при чём.
+    expect(url).toBe("https://example.bitrix24.ru/rest/imbot.message.add.json");
     expect(init.method).toBe("POST");
     const sent = JSON.parse(init.body as string);
+    expect(sent.auth).toBe(ACCESS);
+    // imbot.message.add — сообщение от имени бота. im.message.add отправил бы
+    // его от имени владельца токена, и сотрудники увидели бы живого человека.
     expect(sent.BOT_ID).toBe("42");
     expect(sent.DIALOG_ID).toBe("chat42");
     expect(sent.MESSAGE).toBe("привет");
   });
 
+  it("puts the token in the body, never in the URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okOnce());
+    const { client } = makeClient(fetchMock);
+    await client.sendMessage("chat42", "привет");
+
+    const [url, init] = fetchMock.mock.calls[0];
+    // Строка адреса оседает в журналах промежуточных узлов, тело — нет.
+    expect(String(url)).not.toContain(ACCESS);
+    expect(String(url)).not.toContain("auth");
+    expect(init.body as string).toContain(ACCESS);
+  });
+
+  it("refreshes an already-expired token BEFORE sending", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okOnce());
+    const store = makeStore(tokens({ expiresAt: Date.now() - 1000 }));
+    const { client, refreshImpl } = makeClient(fetchMock, store);
+    await client.sendMessage("chat42", "привет");
+
+    expect(refreshImpl).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(sent.auth).toBe(FRESH.accessToken);
+  });
+
+  it("refreshes once and retries when the portal answers expired_token", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(expiredOnce()).mockResolvedValueOnce(okOnce());
+    const { client, refreshImpl } = makeClient(fetchMock);
+    await expect(client.sendMessage("chat42", "привет")).resolves.toBeUndefined();
+
+    expect(refreshImpl).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).auth).toBe(ACCESS);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body as string).auth).toBe(FRESH.accessToken);
+  });
+
+  it("gives up after one refresh instead of looping on expired_token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(expiredOnce());
+    const { client, refreshImpl } = makeClient(fetchMock);
+    await expect(client.sendMessage("chat42", "привет")).rejects.toThrow(/expired_token/);
+
+    // Ровно одно обновление и ровно две попытки — иначе бесконечный цикл.
+    expect(refreshImpl).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("saves refreshed tokens so the next start does not begin with dead ones", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(expiredOnce()).mockResolvedValueOnce(okOnce());
+    const { client, store } = makeClient(fetchMock);
+    await client.sendMessage("chat42", "привет");
+
+    expect(store.save).toHaveBeenCalledTimes(1);
+    expect(store.load()).toEqual(FRESH);
+  });
+
+  it("refuses to send when the application is not installed", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okOnce());
+    const { client } = makeClient(fetchMock, makeStore(null));
+    await expect(client.sendMessage("chat42", "привет")).rejects.toThrow(/не установлено/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps tokens and the client secret out of every failure message", async () => {
+    const leaks = [ACCESS, REFRESH, CLIENT_SECRET, FRESH.accessToken, FRESH.refreshToken];
+    const expectClean = async (p: Promise<unknown>) => {
+      const err = await p.then(
+        () => null,
+        (e: Error) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      for (const secret of leaks) expect(err!.message).not.toContain(secret);
+      expect(err!.stack ?? "").not.toContain(CLIENT_SECRET);
+    };
+
+    // HTTP failure.
+    await expectClean(makeClient(vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => "boom" })).client.sendMessage("c", "hi"));
+
+    // Network failure: fetch bakes the whole request into its message.
+    const netMock = vi.fn().mockRejectedValue(new TypeError(`Failed to fetch: auth=${ACCESS}`));
+    await expectClean(makeClient(netMock).client.sendMessage("c", "hi"));
+
+    // Refresh failure on a proactive refresh.
+    const expiredStore = makeStore(tokens({ expiresAt: Date.now() - 1000 }));
+    const failingRefresh = vi.fn(async () => {
+      throw new Error(`refresh blew up with client_secret=${CLIENT_SECRET} and ${REFRESH}`);
+    });
+    await expectClean(
+      makeClient(vi.fn().mockResolvedValue(okOnce()), expiredStore, failingRefresh as never).client.sendMessage("c", "hi"),
+    );
+
+    // Refresh failure on the retry path.
+    await expectClean(
+      makeClient(vi.fn().mockResolvedValue(expiredOnce()), makeStore(), failingRefresh as never).client.sendMessage("c", "hi"),
+    );
+
+    // Store write failure after a successful refresh.
+    const badStore = makeStore(tokens({ expiresAt: Date.now() - 1000 }));
+    badStore.save = vi.fn(() => {
+      throw Object.assign(new Error(`EACCES: cannot write ${FRESH.accessToken}`), { code: "EACCES" });
+    });
+    await expectClean(makeClient(vi.fn().mockResolvedValue(okOnce()), badStore).client.sendMessage("c", "hi"));
+
+    // Non-JSON body and an application-level error field.
+    await expectClean(makeClient(vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => "<html>" })).client.sendMessage("c", "hi"));
+    await expectClean(
+      makeClient(
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ error: "BOT_ID_NOT_FOUND", error_description: `token ${ACCESS}` }),
+        }),
+      ).client.sendMessage("c", "hi"),
+    );
+
+    // Not installed.
+    await expectClean(makeClient(vi.fn(), makeStore(null)).client.sendMessage("c", "hi"));
+  });
+
   it("clips an over-long message before sending", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => "{}" });
-    const c = new BitrixClient("https://p.bitrix24.ru/rest/6/secret/", "42", fetchMock as unknown as typeof fetch);
-    await c.sendMessage("chat1", "x".repeat(9000));
+    const fetchMock = vi.fn().mockResolvedValue(okOnce());
+    const { client } = makeClient(fetchMock);
+    await client.sendMessage("chat1", "x".repeat(9000));
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(sent.MESSAGE.length).toBeLessThanOrEqual(8001);
+    expect(sent.BOT_ID).toBe("42");
   });
 
-  it("throws with a message that does NOT contain the webhook secret", async () => {
+  it("reports the HTTP status when the portal fails", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => "boom" });
-    const c = new BitrixClient("https://p.bitrix24.ru/rest/6/supersecret/", "42", fetchMock as unknown as typeof fetch);
-    await expect(c.sendMessage("chat1", "hi")).rejects.toThrow(/500/);
-    await expect(c.sendMessage("chat1", "hi")).rejects.not.toThrow(/supersecret/);
-  });
-
-  it("keeps the webhook secret out of the error when fetch itself throws", async () => {
-    const fetchMock = vi.fn().mockRejectedValue(
-      new TypeError("Failed to parse URL from https://p.bitrix24.ru/rest/6/supersecret/imbot.message.add.json"),
-    );
-    const c = new BitrixClient("https://p.bitrix24.ru/rest/6/supersecret/", "42", fetchMock as unknown as typeof fetch);
-    await expect(c.sendMessage("chat1", "hi")).rejects.not.toThrow(/supersecret/);
+    const { client } = makeClient(fetchMock);
+    await expect(client.sendMessage("chat1", "hi")).rejects.toThrow(/500/);
   });
 
   it("treats an error field in a 200 response as a failure", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
+      status: 200,
       text: async () => JSON.stringify({ error: "BOT_ID_NOT_FOUND", error_description: "no such bot" }),
     });
-    const c = new BitrixClient("https://p.bitrix24.ru/rest/6/secret/", "42", fetchMock as unknown as typeof fetch);
-    await expect(c.sendMessage("chat1", "hi")).rejects.toThrow(/BOT_ID_NOT_FOUND/);
+    const { client } = makeClient(fetchMock);
+    await expect(client.sendMessage("chat1", "hi")).rejects.toThrow(/BOT_ID_NOT_FOUND/);
   });
 
   it("accepts a normal successful answer", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => JSON.stringify({ result: 123 }) });
-    const c = new BitrixClient("https://p.bitrix24.ru/rest/6/secret/", "42", fetchMock as unknown as typeof fetch);
-    await expect(c.sendMessage("chat1", "hi")).resolves.toBeUndefined();
+    const fetchMock = vi.fn().mockResolvedValue(okOnce());
+    const { client } = makeClient(fetchMock);
+    await expect(client.sendMessage("chat1", "hi")).resolves.toBeUndefined();
   });
 
   it("does not cut an emoji in half when clipping", () => {

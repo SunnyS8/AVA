@@ -76,7 +76,20 @@ export class BitrixChannel implements Channel {
       throw new Error("BitrixChannel: bot_id is required — the anti-loop guard depends on it");
     }
     this.portalDomain = this.portalDomain ?? portalDomainFromWebhook(config.webhook_url);
-    this.client = this.client ?? new BitrixClient(config.webhook_url, this.botId);
+    // The bot belongs to the application, so sending needs install tokens —
+    // not the owner's webhook. Without a token store there is nothing to send
+    // with; the channel still starts and still receives, and the first send
+    // attempt is what reports the problem.
+    this.client =
+      this.client ??
+      (this.tokenStore
+        ? new BitrixClient({
+            tokens: this.tokenStore,
+            botId: this.botId,
+            clientId: config.client_id,
+            clientSecret: config.client_secret,
+          })
+        : null);
   }
 
   async stop(): Promise<void> {
