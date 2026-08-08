@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { BitrixTokenStore, type BitrixTokens } from "../../src/channels/bitrix/tokens.js";
+import { BitrixTokenStore, refreshTokens, type BitrixTokens } from "../../src/channels/bitrix/tokens.js";
 
 describe("BitrixTokenStore", () => {
   let dir: string;
@@ -118,5 +118,116 @@ describe("BitrixTokenStore", () => {
       const t: BitrixTokens = { ...sample, expiresAt: Date.now() - 1 };
       expect(store.isExpired(t)).toBe(true);
     });
+  });
+});
+
+describe("refreshTokens", () => {
+  const clientId = "local.app.id";
+  const clientSecret = "super-secret-client-secret";
+  const oldRefreshToken = "old-refresh-token-value";
+
+  function jsonResponse(body: unknown, ok = true, status = 200): Response {
+    return {
+      ok,
+      status,
+      text: async () => JSON.stringify(body),
+    } as Response;
+  }
+
+  it("parses a successful response and computes expiresAt from the current time", async () => {
+    const before = Date.now();
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        access_token: "new-access-token",
+        refresh_token: "new-refresh-token",
+        expires_in: 3600,
+        domain: "example.bitrix24.ru",
+        member_id: "member-789",
+      }),
+    );
+
+    const tokens = await refreshTokens(oldRefreshToken, clientId, clientSecret, fetchImpl);
+    const after = Date.now();
+
+    expect(tokens.accessToken).toBe("new-access-token");
+    expect(tokens.refreshToken).toBe("new-refresh-token");
+    expect(tokens.domain).toBe("example.bitrix24.ru");
+    expect(tokens.memberId).toBe("member-789");
+
+    // expiresAt must be computed from "now + expires_in", not from expires_in
+    // alone (3600) and not left at 0.
+    expect(tokens.expiresAt).toBeGreaterThanOrEqual(before + 3600_000);
+    expect(tokens.expiresAt).toBeLessThanOrEqual(after + 3600_000);
+  });
+
+  it("sends the secrets in the POST body, never in the URL", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        access_token: "new-access-token",
+        refresh_token: "new-refresh-token",
+        expires_in: 3600,
+        domain: "example.bitrix24.ru",
+        member_id: "member-789",
+      }),
+    );
+
+    await refreshTokens(oldRefreshToken, clientId, clientSecret, fetchImpl);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+
+    expect(url).toBe("https://oauth.bitrix.info/oauth/token/");
+    expect(url).not.toContain(clientSecret);
+    expect(url).not.toContain(oldRefreshToken);
+
+    expect(init.method).toBe("POST");
+    const body = String(init.body);
+    expect(body).toContain(clientSecret);
+    expect(body).toContain(oldRefreshToken);
+    expect(body).toContain("grant_type=refresh_token");
+  });
+
+  it("throws on an error response from the portal, without leaking secrets", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ error: "invalid_grant", error_description: `bad refresh token ${oldRefreshToken}` }, false, 400),
+    );
+
+    let caught: Error | undefined;
+    try {
+      await refreshTokens(oldRefreshToken, clientId, clientSecret, fetchImpl);
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).toBeDefined();
+    const message = caught!.message;
+    expect(message).not.toContain(clientSecret);
+    expect(message).not.toContain(oldRefreshToken);
+    expect(message).not.toContain("new-access-token");
+    expect(message).toContain("invalid_grant");
+  });
+
+  it("throws when fetch itself fails, without leaking secrets", async () => {
+    // Real fetch bakes the whole URL — query string included — into the
+    // error message on a network failure. The refresh URL carries no
+    // secrets itself, but the assertion still guards against a regression
+    // that would move the params back into the query string.
+    const fetchImpl = vi.fn().mockRejectedValue(
+      new TypeError(
+        `fetch failed: https://oauth.bitrix.info/oauth/token/?client_secret=${clientSecret}&refresh_token=${oldRefreshToken}`,
+      ),
+    );
+
+    let caught: Error | undefined;
+    try {
+      await refreshTokens(oldRefreshToken, clientId, clientSecret, fetchImpl);
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).toBeDefined();
+    const message = caught!.message;
+    expect(message).not.toContain(clientSecret);
+    expect(message).not.toContain(oldRefreshToken);
   });
 });

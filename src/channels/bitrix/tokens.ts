@@ -119,3 +119,72 @@ export class BitrixTokenStore {
     return now >= tokens.expiresAt - EXPIRY_MARGIN_MS;
   }
 }
+
+/** OAuth token endpoint shared by every Bitrix24 portal — not portal-specific. */
+const OAUTH_TOKEN_URL = "https://oauth.bitrix.info/oauth/token/";
+
+interface BitrixOAuthResponse {
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  domain?: string;
+  member_id?: string;
+  error?: string;
+}
+
+/**
+ * Exchanges a refresh token for a fresh access/refresh token pair.
+ *
+ * Parameters travel in the POST body, never the query string: intermediate
+ * proxies and access logs commonly record the request URL but not the body,
+ * and `client_secret` plus both tokens are live credentials.
+ */
+export async function refreshTokens(
+  refreshToken: string,
+  clientId: string,
+  clientSecret: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<BitrixTokens> {
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken,
+  });
+
+  let res: Response;
+  try {
+    res = await fetchImpl(OAUTH_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+  } catch (err) {
+    // fetch bakes the whole request — including a query string, were the
+    // secrets ever moved there — into its error message on network failure.
+    // Only the error kind may leave this module.
+    throw new Error(`Bitrix token refresh request failed: ${(err as Error).name}`);
+  }
+
+  const raw = await res.text();
+  let data: BitrixOAuthResponse;
+  try {
+    data = JSON.parse(raw) as BitrixOAuthResponse;
+  } catch {
+    throw new Error("Bitrix token refresh returned a non-JSON body");
+  }
+
+  if (!res.ok || typeof data.error === "string") {
+    // error_description may echo request data back (e.g. the bad refresh
+    // token) — only the error code goes out.
+    throw new Error(`Bitrix token refresh rejected: ${data.error ?? `HTTP ${res.status}`}`);
+  }
+
+  return {
+    accessToken: data.access_token as string,
+    refreshToken: data.refresh_token as string,
+    expiresAt: Date.now() + (data.expires_in as number) * 1000,
+    domain: data.domain as string,
+    memberId: data.member_id as string,
+  };
+}
