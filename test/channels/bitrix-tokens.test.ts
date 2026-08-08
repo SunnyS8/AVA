@@ -207,6 +207,33 @@ describe("refreshTokens", () => {
     expect(message).toContain("invalid_grant");
   });
 
+  it("throws on an incomplete successful response, without leaking secrets", async () => {
+    // access_token present, refresh_token missing — a partial response like
+    // this must not silently produce a token record with a hole in it.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        access_token: "new-access-token",
+        expires_in: 3600,
+        domain: "example.bitrix24.ru",
+        member_id: "member-789",
+      }),
+    );
+
+    let caught: Error | undefined;
+    try {
+      await refreshTokens(oldRefreshToken, clientId, clientSecret, fetchImpl);
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).toBeDefined();
+    const message = caught!.message;
+    expect(message).toContain("refresh_token");
+    expect(message).not.toContain(clientSecret);
+    expect(message).not.toContain(oldRefreshToken);
+    expect(message).not.toContain("new-access-token");
+  });
+
   it("throws when fetch itself fails, without leaking secrets", async () => {
     // Real fetch bakes the whole URL — query string included — into the
     // error message on a network failure. The refresh URL carries no

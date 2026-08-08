@@ -132,6 +132,34 @@ interface BitrixOAuthResponse {
   error?: string;
 }
 
+/** Non-error fields a successful response must carry. */
+const REQUIRED_OAUTH_STRING_FIELDS: (keyof BitrixOAuthResponse)[] = [
+  "access_token",
+  "refresh_token",
+  "domain",
+  "member_id",
+];
+
+/**
+ * Finds the first required field missing from an otherwise-successful
+ * response, so a truncated or half-configured portal reply fails loudly
+ * here instead of silently producing a token record with holes in it that
+ * only surfaces later, at the next `load()`, as an unrelated-looking
+ * "missing required fields" error.
+ */
+function findMissingOAuthField(data: BitrixOAuthResponse): string | undefined {
+  for (const field of REQUIRED_OAUTH_STRING_FIELDS) {
+    if (typeof data[field] !== "string" || data[field] === "") return field;
+  }
+  // expires_in arrives as JSON so it's normally already a number; Number()
+  // is a deliberate, explicit coercion (not relying on `+`/implicit JS
+  // coercion) to also accept a numeric string without accepting garbage.
+  if (data.expires_in === undefined || data.expires_in === null || Number.isNaN(Number(data.expires_in))) {
+    return "expires_in";
+  }
+  return undefined;
+}
+
 /**
  * Exchanges a refresh token for a fresh access/refresh token pair.
  *
@@ -166,9 +194,9 @@ export async function refreshTokens(
     throw new Error(`Bitrix token refresh request failed: ${(err as Error).name}`);
   }
 
-  const raw = await res.text();
   let data: BitrixOAuthResponse;
   try {
+    const raw = await res.text();
     data = JSON.parse(raw) as BitrixOAuthResponse;
   } catch {
     throw new Error("Bitrix token refresh returned a non-JSON body");
@@ -180,10 +208,17 @@ export async function refreshTokens(
     throw new Error(`Bitrix token refresh rejected: ${data.error ?? `HTTP ${res.status}`}`);
   }
 
+  const missingField = findMissingOAuthField(data);
+  if (missingField) {
+    // Report which field is missing, never the response body — a partial
+    // response can still carry a real token in another field.
+    throw new Error(`Bitrix token refresh returned an incomplete response: missing ${missingField}`);
+  }
+
   return {
     accessToken: data.access_token as string,
     refreshToken: data.refresh_token as string,
-    expiresAt: Date.now() + (data.expires_in as number) * 1000,
+    expiresAt: Date.now() + Number(data.expires_in) * 1000,
     domain: data.domain as string,
     memberId: data.member_id as string,
   };
