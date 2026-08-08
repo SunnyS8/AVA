@@ -581,7 +581,7 @@ const ev = (token: string): BitrixEvent => ({
   fromUserId: "7",
   text: "hi",
   applicationToken: token,
-  fromBot: false,
+  authorId: "17",
 });
 
 describe("verifyEvent", () => {
