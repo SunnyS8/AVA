@@ -4,6 +4,7 @@ import { parseBitrixEvent, parseInstallEvent, type BitrixInstall } from "./event
 import { verifyEvent } from "./verify.js";
 import { BitrixClient } from "./client.js";
 import { DialogQueue } from "./queue.js";
+import { hasMedia, loadMedia, mediaKind, withApology, MediaLoadError, type MediaPayload } from "./media.js";
 import type { BitrixTokenStore } from "./tokens.js";
 
 export interface BitrixChannelOptions {
@@ -131,7 +132,48 @@ export class BitrixChannel implements Channel {
           "Установите приложение в портале и перезапустите Аву.",
       );
     }
-    await this.client.sendMessage(dialogId, message.text);
+    await this.deliver(this.client, dialogId, message);
+  }
+
+  /**
+   * Delivers one answer, media and all.
+   *
+   * The rule that matters: media may fail, the TEXT never silently does. Every
+   * way the file can be lost — not on disk, too heavy, a reference we cannot
+   * read, a portal that refuses the upload — ends in one message that carries
+   * both what Ava said and, in plain Russian, what did not go out. Before this,
+   * a generated video was dropped without a word and the person waited for
+   * nothing (live check 08.08.2026).
+   */
+  private async deliver(client: BitrixClient, dialogId: string, message: OutgoingMessage): Promise<void> {
+    // No media asked for, no new behaviour: the old path, byte for byte.
+    if (!hasMedia(message)) {
+      await client.sendMessage(dialogId, message.text);
+      return;
+    }
+
+    const kind = mediaKind(message);
+
+    let file: MediaPayload;
+    try {
+      file = await loadMedia(message);
+    } catch (err) {
+      // loadMedia throws MediaLoadError and nothing else; an unknown failure is
+      // still an undelivered file, so it gets the same honest answer.
+      const reason = err instanceof MediaLoadError ? err.reason : "missing";
+      console.warn(`bitrix: media not loaded (${reason})`);
+      await client.sendMessage(dialogId, withApology(message.text, kind, reason));
+      return;
+    }
+
+    try {
+      await client.sendFile(dialogId, file, message.text);
+    } catch (err) {
+      // The portal's own words go to the log — the error code and the status,
+      // which is where "no disk right" is diagnosable. The person gets Russian.
+      console.warn(`bitrix: media not delivered (${(err as Error).message})`);
+      await client.sendMessage(dialogId, withApology(message.text, kind, "portal"));
+    }
   }
 
   onMessage(handler: MessageHandler): void {
@@ -207,7 +249,7 @@ export class BitrixChannel implements Channel {
           timestamp: Date.now(),
           metadata: { dialogId: event.dialogId },
         });
-        await client.sendMessage(event.dialogId, answer.text);
+        await this.deliver(client, event.dialogId, answer);
       } catch (err) {
         console.error("bitrix: failed to answer", (err as Error).message);
         await client
