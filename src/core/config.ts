@@ -95,6 +95,13 @@ const configSchema = z.object({
     // string, so downstream comparisons (BitrixChannel's anti-loop check)
     // keep working either way.
     bot_id: z.coerce.string().optional(),
+    // Application keys from the portal's application page. Secrets — treated
+    // like every other key here: never logged, only placeholders in the
+    // example config. Optional so a webhook-only setup still parses; the
+    // channel itself refuses to start without them when it has a token store
+    // (see BitrixChannel.start).
+    client_id: z.string().optional(),
+    client_secret: z.string().optional(),
   }).optional(),
 
   profiles: z.object({

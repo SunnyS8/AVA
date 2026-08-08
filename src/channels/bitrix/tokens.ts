@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { getConfigDir } from "../../core/config.js";
 
 /**
  * Access/refresh token pair issued by a Bitrix24 portal to a local
@@ -14,8 +15,21 @@ export interface BitrixTokens {
   /** Portal domain the tokens were issued for, e.g. "example.bitrix24.ru". */
   domain: string;
   memberId: string;
+  /**
+   * The `application_token` the portal issued at install time — the shared
+   * secret every later event is signed with.
+   *
+   * Optional on purpose. It is born inside the install event, so a token file
+   * written before this field existed (or one filled in from a webhook setup)
+   * simply does not have it, and demanding it would make such a file
+   * unreadable — which looks exactly like an uninstalled application. Absent
+   * means "fall back to the value from the config".
+   */
+  applicationToken?: string;
 }
 
+/** Fields without which a token record is useless. `applicationToken` is
+ *  deliberately NOT here — see the field's comment. */
 const REQUIRED_FIELDS: (keyof BitrixTokens)[] = [
   "accessToken",
   "refreshToken",
@@ -33,7 +47,8 @@ function isBitrixTokens(value: unknown): value is BitrixTokens {
     typeof v.refreshToken === "string" &&
     typeof v.expiresAt === "number" &&
     typeof v.domain === "string" &&
-    typeof v.memberId === "string"
+    typeof v.memberId === "string" &&
+    (v.applicationToken === undefined || typeof v.applicationToken === "string")
   );
 }
 
@@ -51,7 +66,7 @@ const EXPIRY_MARGIN_MS = 60_000;
  * file content in the log, since that content is a live credential.
  */
 export class BitrixTokenStore {
-  constructor(private filePath: string) {}
+  constructor(readonly filePath: string) {}
 
   load(): BitrixTokens | null {
     let raw: string;
@@ -118,6 +133,19 @@ export class BitrixTokenStore {
   isExpired(tokens: BitrixTokens, now: number = Date.now()): boolean {
     return now >= tokens.expiresAt - EXPIRY_MARGIN_MS;
   }
+}
+
+/** File name inside the config directory. Kept next to config.yaml because it
+ *  belongs to the same installation and is protected the same way. */
+const TOKEN_FILE_NAME = "bitrix-tokens.json";
+
+/**
+ * The token store the application actually runs with: one file per
+ * installation, in the same directory the config lives in (`~/.betsy`), so
+ * moving or backing up a Betsy installation carries its portal install along.
+ */
+export function createBitrixTokenStore(): BitrixTokenStore {
+  return new BitrixTokenStore(path.join(getConfigDir(), TOKEN_FILE_NAME));
 }
 
 /** OAuth token endpoint shared by every Bitrix24 portal — not portal-specific. */

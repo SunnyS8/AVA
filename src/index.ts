@@ -6,6 +6,7 @@ import { isConfigured, loadConfig, saveConfig, getAgentName, getPersonality, get
 import { TelegramChannel } from "./channels/telegram/index.js";
 import { BitrixChannel } from "./channels/bitrix/index.js";
 import { buildBitrixHandler } from "./channels/bitrix/wiring.js";
+import { createBitrixTokenStore } from "./channels/bitrix/tokens.js";
 import { RateLimiter } from "./core/limits.js";
 import { LLMRouter } from "./core/llm/router.js";
 import { Engine } from "./core/engine.js";
@@ -189,7 +190,11 @@ async function main() {
         config.profiles?.limits.per_hour ?? 15,
         config.profiles?.limits.per_day_total ?? 300,
       );
-      const bitrixChannel = new BitrixChannel();
+      // Real store, in the config directory: an ONAPPINSTALL from the portal
+      // must land on disk, not in the "no token store configured" branch.
+      const bitrixChannel = new BitrixChannel({
+        tokenStore: createBitrixTokenStore(),
+      });
       bitrixChannel.onMessage(
         buildBitrixHandler({
           ask: async (msg, _profile, access) => {
@@ -210,6 +215,11 @@ async function main() {
         webhook_url: config.bitrix.webhook_url,
         application_token: config.bitrix.application_token,
         bot_id: config.bitrix.bot_id,
+        // Empty string, not undefined: start() reports the missing keys in
+        // Russian, and the catch below turns that into one clear line for the
+        // owner instead of a channel that half-works for an hour.
+        client_id: config.bitrix.client_id ?? "",
+        client_secret: config.bitrix.client_secret ?? "",
       });
       bitrix = bitrixChannel;
       channels.set("bitrix", bitrix);

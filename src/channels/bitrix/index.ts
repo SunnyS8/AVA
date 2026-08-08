@@ -80,16 +80,24 @@ export class BitrixChannel implements Channel {
     // not the owner's webhook. Without a token store there is nothing to send
     // with; the channel still starts and still receives, and the first send
     // attempt is what reports the problem.
-    this.client =
-      this.client ??
-      (this.tokenStore
-        ? new BitrixClient({
-            tokens: this.tokenStore,
-            botId: this.botId,
-            clientId: config.client_id,
-            clientSecret: config.client_secret,
-          })
-        : null);
+    if (!this.client && this.tokenStore) {
+      // Without the application keys the client cannot trade a refresh token
+      // for a new pair, so it would work for exactly one hour after the
+      // install and then go silent. Refuse now, loudly, instead of failing
+      // later in a way nobody connects back to a missing setting.
+      if (!config.client_id || !config.client_secret) {
+        throw new Error(
+          "BitrixChannel: не заданы client_id и client_secret приложения Битрикса. " +
+            "Впишите их в раздел bitrix конфига (~/.betsy/config.yaml) — они есть на странице приложения в портале.",
+        );
+      }
+      this.client = new BitrixClient({
+        tokens: this.tokenStore,
+        botId: this.botId,
+        clientId: config.client_id,
+        clientSecret: config.client_secret,
+      });
+    }
   }
 
   async stop(): Promise<void> {
@@ -131,7 +139,7 @@ export class BitrixChannel implements Channel {
     // against is the one the install itself delivers.
     if (event.event === INSTALL_EVENT) return this.handleInstall(body);
 
-    if (!verifyEvent(event, this.applicationToken)) {
+    if (!verifyEvent(event, this.expectedApplicationToken())) {
       console.warn("bitrix: event rejected, token mismatch");
       return { status: 401 };
     }
@@ -190,6 +198,22 @@ export class BitrixChannel implements Channel {
     });
 
     return { status: 200 };
+  }
+
+  /**
+   * The secret incoming events are checked against.
+   *
+   * The stored key wins: it is the one THIS portal issued to THIS installation
+   * and the only one events are actually signed with. The config value is a
+   * fallback for the pre-application setup (webhook, key filled in by hand) —
+   * before an install there is nothing stored, and without the fallback the
+   * channel would reject everything.
+   *
+   * Read from disk per event rather than cached: the file is small and local,
+   * and a re-install must take effect immediately, not after a restart.
+   */
+  private expectedApplicationToken(): string | undefined {
+    return this.tokenStore?.load()?.applicationToken ?? this.applicationToken;
   }
 
   /**
@@ -265,6 +289,10 @@ export class BitrixChannel implements Channel {
         // portal URLs from it later should not have to wonder about case.
         domain: install.domain.toLowerCase(),
         memberId: install.memberId,
+        // The portal issues this key inside the install event and never shows
+        // it again — nowhere else to get it, and every later event is verified
+        // against it. Unsaved means every event after the install is refused.
+        applicationToken: install.applicationToken,
       });
       console.log("bitrix: application installed, tokens saved");
       return true;

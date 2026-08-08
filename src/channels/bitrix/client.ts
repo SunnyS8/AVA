@@ -125,17 +125,24 @@ export class BitrixClient {
       throw new Error(`Bitrix token refresh failed: ${(err as Error).name}`);
     }
 
+    // The portal does not return `application_token` on refresh — it is issued
+    // once, at install. Saving the fresh pair as-is would therefore drop it an
+    // hour after the install, and from then on every incoming event fails
+    // verification: a break that looks like "it worked and then stopped by
+    // itself". Carry it over explicitly.
+    const merged: BitrixTokens = { ...fresh, applicationToken: tokens.applicationToken };
+
     // A pair that never reaches the disk is a pair the next start does not
     // have: the old refresh token is already spent, so a silent failure here
     // would leave the application permanently locked out.
     try {
-      this.tokens.save(fresh);
+      this.tokens.save(merged);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       throw new Error(`Bitrix token store write failed: ${code ?? "unknown error"}`);
     }
 
-    return fresh;
+    return merged;
   }
 
   /** One call to imbot.message.add. Throws on anything a retry cannot fix. */
