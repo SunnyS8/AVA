@@ -85,7 +85,13 @@ const configSchema = z.object({
 
   bitrix: z.object({
     webhook_url: z.string(),
-    application_token: z.string(),
+    // Optional on purpose. As an application, this key is born inside the
+    // ONAPPINSTALL event and is stored next to the tokens — it cannot be in
+    // the config before the install, and only a running channel can receive
+    // that install. Requiring it here stripped the whole bitrix section on
+    // parse, so the channel never started and the install never arrived.
+    // A webhook-era setup may still carry it; the stored key wins.
+    application_token: z.string().optional(),
     // Identifier, not a secret or a URL — the owner fills it in by hand from
     // a script's printed output (scripts/register-bitrix-bot.mjs), and YAML
     // reads an unquoted `bot_id: 42` as a number. Without coercion that

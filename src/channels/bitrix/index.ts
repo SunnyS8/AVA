@@ -44,7 +44,10 @@ function portalDomainFromWebhook(webhookUrl: string | undefined): string | undef
  */
 export class BitrixChannel implements Channel {
   name = "bitrix";
-  requiredConfig = ["webhook_url", "application_token", "bot_id"];
+  // What is needed to START. `application_token` and `bot_id` are deliberately
+  // absent: both are produced by the install and the registration that only a
+  // running channel can carry out.
+  requiredConfig = ["webhook_url", "client_id", "client_secret"];
 
   private handler: MessageHandler | null = null;
   private queue = new DialogQueue();
@@ -68,13 +71,6 @@ export class BitrixChannel implements Channel {
     }
     this.applicationToken = this.applicationToken ?? config.application_token;
     this.botId = this.botId ?? config.bot_id;
-    if (!this.botId) {
-      // Without our own id the anti-loop guard cannot tell our own messages
-      // from anyone else's, and the bot would answer itself until the limits
-      // run out. requiredConfig already declares bot_id mandatory — refuse to
-      // start rather than run with the guard silently disabled.
-      throw new Error("BitrixChannel: bot_id is required — the anti-loop guard depends on it");
-    }
     this.portalDomain = this.portalDomain ?? portalDomainFromWebhook(config.webhook_url);
     // The bot belongs to the application, so sending needs install tokens —
     // not the owner's webhook. Without a token store there is nothing to send
@@ -91,12 +87,18 @@ export class BitrixChannel implements Channel {
             "Впишите их в раздел bitrix конфига (~/.betsy/config.yaml) — они есть на странице приложения в портале.",
         );
       }
-      this.client = new BitrixClient({
-        tokens: this.tokenStore,
-        botId: this.botId,
-        clientId: config.client_id,
-        clientSecret: config.client_secret,
-      });
+      // No bot_id yet means the bot has not been registered, so there is
+      // nothing to send AS and nothing of ours in the portal to loop against.
+      // The channel still starts and still receives — that is how the install
+      // arrives at all. send() is what reports the missing registration.
+      if (this.botId) {
+        this.client = new BitrixClient({
+          tokens: this.tokenStore,
+          botId: this.botId,
+          clientId: config.client_id,
+          clientSecret: config.client_secret,
+        });
+      }
     }
   }
 
@@ -112,7 +114,24 @@ export class BitrixChannel implements Channel {
    * notifications) must pass the dialog id from `metadata.dialogId`.
    */
   async send(dialogId: string, message: OutgoingMessage): Promise<void> {
-    await this.client?.sendMessage(dialogId, message.text);
+    // A silent no-op here loses the answer an employee is waiting for and says
+    // nothing about why. Both causes are things the owner can act on, so name
+    // them. Refusing without a bot_id is also what keeps the anti-loop guard
+    // honest: the guard compares against our own id, so with no id nothing of
+    // ours may reach the portal in the first place.
+    if (!this.botId) {
+      throw new Error(
+        "Bitrix: бот не зарегистрирован — нет bot_id. " +
+          "Зарегистрируйте бота (scripts/register-bitrix-bot.mjs), впишите bot_id в конфиг и перезапустите Аву.",
+      );
+    }
+    if (!this.client) {
+      throw new Error(
+        "Bitrix: отправка не настроена — нет хранилища токенов приложения. " +
+          "Установите приложение в портале и перезапустите Аву.",
+      );
+    }
+    await this.client.sendMessage(dialogId, message.text);
   }
 
   onMessage(handler: MessageHandler): void {

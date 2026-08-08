@@ -25,7 +25,12 @@ describe("BitrixChannel", () => {
     const { ch } = makeChannel();
     expect(ch.name).toBe("bitrix");
     expect(ch.requiredConfig).toContain("webhook_url");
-    expect(ch.requiredConfig).toContain("application_token");
+    expect(ch.requiredConfig).toContain("client_id");
+    expect(ch.requiredConfig).toContain("client_secret");
+    // Deliberately NOT required to start: both are produced by an install and
+    // a registration that only a running channel can carry out.
+    expect(ch.requiredConfig).not.toContain("application_token");
+    expect(ch.requiredConfig).not.toContain("bot_id");
   });
 
   it("answers 200 immediately and replies into the same dialog", async () => {
@@ -119,16 +124,22 @@ describe("BitrixChannel", () => {
     expect(ch.handleWebhook("garbage=1").status).toBe(400);
   });
 
-  it("refuses to start without a bot id — the anti-loop guard depends on it", async () => {
-    const ch = new BitrixChannel();
+  it("starts without a bot id but refuses to send — the anti-loop guard depends on it", async () => {
+    // The guard compares the sender against our own bot id, so without one it
+    // cannot tell our messages from anyone else's. Starting is still required
+    // (the install event has to reach us somehow), so the protection moved to
+    // the other end: nothing can be sent, therefore nothing of ours exists in
+    // the portal to loop against. An injected client does not bypass this.
+    const ch = new BitrixChannel({ client: { sendMessage: async () => {} } as never });
     ch.onMessage(async () => ({ text: "ok" }));
-    await expect(
-      ch.start({
-        webhook_url: "https://p.bitrix24.ru/rest/6/secret/",
-        application_token: "tok",
-        bot_id: "",
-      }),
-    ).rejects.toThrow(/bot_id/);
+
+    await ch.start({
+      webhook_url: "https://p.bitrix24.ru/rest/6/secret/",
+      application_token: "tok",
+      bot_id: "",
+    });
+
+    await expect(ch.send("chat42", { text: "привет" })).rejects.toThrow(/bot_id|не зарегистрирован/);
   });
 
   it("does not call the engine on an empty message", async () => {
