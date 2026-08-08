@@ -4,9 +4,12 @@ const MIME_TYPES: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
+  webp: "image/webp",
   ogg: "audio/ogg",
   mp3: "audio/mpeg",
   wav: "audio/wav",
+  m4a: "audio/mp4",
+  aac: "audio/aac",
 };
 
 function dataUrlFallback(buffer: Buffer, contentType: string): string {
