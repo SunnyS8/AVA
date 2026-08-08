@@ -20,6 +20,11 @@ llm:
   api_key: YOUR_OPENROUTER_API_KEY
   fast_model: google/gemini-2.5-flash
   strong_model: anthropic/claude-sonnet-4
+  # base_url: https://api.kie.ai/v1                # Адрес OpenAI-совместимого провайдера.
+  #                                                # Нужен, когда сам OpenRouter недоступен:
+  #                                                # с российского хостинга он отвечает
+  #                                                # 403 «Access denied by security policy».
+  #                                                # Не задан — работает OpenRouter, как раньше.
   # fallback_models:                           # Free models for when balance runs out
   #   - qwen/qwen3-coder:free
   #   - nvidia/nemotron-3-super-120b-a12b:free
