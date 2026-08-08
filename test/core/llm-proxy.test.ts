@@ -150,37 +150,51 @@ describe("llm proxy — requests", () => {
   });
 });
 
+/** Everything an operator could see of a thrown error: message, stack, own
+ *  fields, and the cause chain — where the underlying fetch hides the target. */
+function errorText(err: unknown, depth = 0): string {
+  if (!(err instanceof Error) || depth > 4) return String(err);
+  return [
+    err.message,
+    err.stack ?? "",
+    JSON.stringify(err, Object.getOwnPropertyNames(err)),
+    errorText((err as { cause?: unknown }).cause, depth + 1),
+  ].join(" ");
+}
+
 describe("llm proxy — secrets", () => {
-  it("keeps the proxy credentials and the api key out of failure messages", async () => {
-    // Port 1 refuses connections, so the failure happens inside the proxy hop.
-    const proxyUrl = `http://${PROXY_LOGIN}:${PROXY_PASSWORD}@127.0.0.1:1`;
+  // Port 1 refuses connections, so the failure happens on the proxy hop and
+  // the raw error would otherwise quote the proxy address.
+  const DEAD_PROXY_HOST = "127.0.0.1:1";
+
+  it("keeps the proxy address and the api key out of chat failures", async () => {
     const client = createOpenRouterClient({
       apiKey: API_KEY,
       model: "a/fast",
       baseURL: "http://llm.invalid/v1",
-      proxy: proxyUrl,
+      proxy: `http://${PROXY_LOGIN}:${PROXY_PASSWORD}@${DEAD_PROXY_HOST}`,
     });
 
     const err = await client.chat([{ role: "user", content: "hi" }]).catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(Error);
-    const text = JSON.stringify(err, Object.getOwnPropertyNames(err as Error))
-      + (err as Error).message + ((err as Error).stack ?? "");
+    const text = errorText(err);
     expect(text).not.toContain(PROXY_LOGIN);
     expect(text).not.toContain(PROXY_PASSWORD);
+    expect(text).not.toContain(DEAD_PROXY_HOST);
     expect(text).not.toContain(API_KEY);
   });
 
-  it("keeps the proxy credentials out of balance check failures", async () => {
-    const proxyFetch = createProxyFetch(`socks5://${PROXY_LOGIN}:${PROXY_PASSWORD}@127.0.0.1:1`)!;
+  it("keeps the proxy address out of balance check failures", async () => {
+    const proxyFetch = createProxyFetch(`socks5://${PROXY_LOGIN}:${PROXY_PASSWORD}@${DEAD_PROXY_HOST}`)!;
 
     const err = await checkBalance(API_KEY, undefined, proxyFetch).catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(Error);
-    const text = JSON.stringify(err, Object.getOwnPropertyNames(err as Error))
-      + (err as Error).message + ((err as Error).stack ?? "");
+    const text = errorText(err);
     expect(text).not.toContain(PROXY_LOGIN);
     expect(text).not.toContain(PROXY_PASSWORD);
+    expect(text).not.toContain(DEAD_PROXY_HOST);
     expect(text).not.toContain(API_KEY);
   });
 });
