@@ -49,11 +49,13 @@ const body = {
   EVENT_MESSAGE_ADD: HANDLER,
   EVENT_WELCOME_MESSAGE: HANDLER,
   EVENT_BOT_DELETE: HANDLER,
+  // Только заполненные поля. Пустая строка в PERSONAL_BIRTHDAY роняет
+  // регистрацию: портал пытается разобрать её как дату и отвечает
+  // «HTTP 400, error 500, Incorrect date/time» — по коду ошибки причину не
+  // угадать. Замер 08.08.2026: тот же запрос без пустых полей проходит.
   PROPERTIES: {
     NAME: "Ава",
     COLOR: "AQUA",
-    EMAIL: "",
-    PERSONAL_BIRTHDAY: "",
     WORK_POSITION: "AI-компаньон",
   },
 };
