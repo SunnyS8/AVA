@@ -25,6 +25,11 @@ llm:
   #                                                # с российского хостинга он отвечает
   #                                                # 403 «Access denied by security policy».
   #                                                # Не задан — работает OpenRouter, как раньше.
+  # proxy: http://user:pass@host:port              # Прокси для запросов к модели.
+  #                                                # Второй способ обойти гео-блокировку:
+  #                                                # OpenRouter отвечает 200 через прокси.
+  #                                                # Поддерживается и socks5://user:pass@host:port.
+  #                                                # Не задан — запросы идут напрямую.
   # fallback_models:                           # Free models for when balance runs out
   #   - qwen/qwen3-coder:free
   #   - nvidia/nemotron-3-super-120b-a12b:free

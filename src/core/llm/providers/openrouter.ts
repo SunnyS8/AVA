@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { LLMClient, LLMMessage, LLMResponse, ToolDefinition, StreamCallback } from "../types.js";
+import { createProxyFetch } from "../proxy.js";
 
 /** Address used when the config names no other OpenAI-compatible endpoint. */
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -9,7 +10,9 @@ export interface OpenRouterOptions {
   model: string;
   /** OpenAI-compatible endpoint; defaults to OpenRouter. */
   baseURL?: string;
-  /** Seam for tests; production always goes through the global fetch. */
+  /** Proxy address (`http://…` or `socks5://…`); absent means direct. */
+  proxy?: string;
+  /** Seam for tests; production builds its fetch from `proxy`. */
   fetchImpl?: typeof fetch;
 }
 
@@ -148,6 +151,7 @@ export async function checkBalance(
 }
 
 export function createOpenRouterClient(opts: OpenRouterOptions): LLMClient {
+  const fetchImpl = opts.fetchImpl ?? createProxyFetch(opts.proxy);
   const client = new OpenAI({
     apiKey: opts.apiKey,
     baseURL: normalizeBaseUrl(opts.baseURL),
@@ -155,7 +159,7 @@ export function createOpenRouterClient(opts: OpenRouterOptions): LLMClient {
       "HTTP-Referer": "https://github.com/Aimagine-life/betsy",
       "X-Title": "Betsy",
     },
-    ...(opts.fetchImpl ? { fetch: opts.fetchImpl } : {}),
+    ...(fetchImpl ? { fetch: fetchImpl } : {}),
   });
 
   return {

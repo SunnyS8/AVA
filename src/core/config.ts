@@ -35,6 +35,8 @@ const llmProviderSchema = z.object({
   api_key: z.string(),
   // Address of an OpenAI-compatible endpoint. Absent — OpenRouter is used.
   base_url: z.string().optional(),
+  // Proxy for model requests. Absent — the requests go out directly.
+  proxy: z.string().optional(),
 });
 
 const llmSchema = z.union([
@@ -46,6 +48,7 @@ const llmSchema = z.union([
     strong_model: z.string().optional(),
     fallback_models: z.array(z.string()).optional(),
     base_url: z.string().optional(),
+    proxy: z.string().optional(),
   }),
   // Old nested format (fast/strong)
   z.object({
@@ -203,12 +206,14 @@ function normalizeConfig(raw: Record<string, unknown>): Record<string, unknown> 
         model: raw.model ?? raw.fast_model,
         api_key: raw.api_key,
         base_url: raw.base_url,
+        proxy: raw.proxy,
       },
       strong: {
         provider: raw.provider ?? "openrouter",
         model: raw.strong_model ?? raw.model,
         api_key: raw.api_key,
         base_url: raw.base_url,
+        proxy: raw.proxy,
       },
       fallback_models: raw.fallback_models,
     };
