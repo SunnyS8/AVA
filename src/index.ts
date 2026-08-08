@@ -84,6 +84,8 @@ async function main() {
         fast_model: llmConfig.fast.model,
         strong_model: llmConfig.strong?.model ?? llmConfig.fast.model,
         fallback_models: llmConfig.fallback_models,
+        base_url: llmConfig.fast.base_url ?? llmConfig.strong?.base_url,
+        proxy: llmConfig.fast.proxy ?? llmConfig.strong?.proxy,
       });
     } else {
       llm = new LLMRouter({
@@ -92,9 +94,13 @@ async function main() {
         fast_model: llmConfig.fast_model,
         strong_model: llmConfig.strong_model,
         fallback_models: llmConfig.fallback_models,
+        base_url: llmConfig.base_url,
+        proxy: llmConfig.proxy,
       });
     }
-    console.log("✅ LLM подключён");
+    // Адрес прокси содержит логин и пароль — в журнал он не попадает.
+    const viaProxy = llmConfig.proxy ?? llmConfig.fast?.proxy ?? llmConfig.strong?.proxy;
+    console.log(`✅ LLM подключён${viaProxy ? " (через прокси)" : ""}`);
   }
 
   // Register tools

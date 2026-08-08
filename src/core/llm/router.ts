@@ -1,6 +1,7 @@
 import type { LLMClient, LLMMessage, LLMResponse, ToolDefinition, StreamCallback } from "./types.js";
 import { createOpenRouterClient } from "./providers/openrouter.js";
-import { isBillingError, isRateLimitError, checkBalance } from "./providers/openrouter.js";
+import { isBillingError, isRateLimitError, checkBalance, isOpenRouterBaseUrl } from "./providers/openrouter.js";
+import { createProxyFetch } from "./proxy.js";
 
 const DEFAULT_FALLBACKS = [
   "openrouter/free",
@@ -55,11 +56,19 @@ export interface LLMRouterConfig {
   fast_model: string;
   strong_model: string;
   fallback_models?: string[];
+  /** OpenAI-compatible endpoint; absent means OpenRouter. */
+  base_url?: string;
+  /** Proxy address (`http://…` or `socks5://…`); absent means direct. */
+  proxy?: string;
+  /** Seam for tests; production builds its fetch from `proxy`. */
+  fetchImpl?: typeof fetch;
 }
 
 export class LLMRouter {
   private readonly config: LLMRouterConfig;
   private readonly fallbackModels: string[];
+  /** Built once: every client and the balance check share the same proxy. */
+  private readonly fetchImpl: typeof fetch | undefined;
 
   // Proxies returned to consumers — created once, delegate internally
   private fastProxy: LLMClient | undefined;
@@ -77,6 +86,7 @@ export class LLMRouter {
 
   constructor(config: LLMRouterConfig) {
     this.config = config;
+    this.fetchImpl = config.fetchImpl ?? createProxyFetch(config.proxy);
     this.fallbackModels = config.fallback_models?.length
       ? config.fallback_models
       : DEFAULT_FALLBACKS;
@@ -111,7 +121,12 @@ export class LLMRouter {
   private createClient(model: string): LLMClient {
     switch (this.config.provider) {
       case "openrouter":
-        return createOpenRouterClient({ apiKey: this.config.api_key, model });
+        return createOpenRouterClient({
+          apiKey: this.config.api_key,
+          model,
+          baseURL: this.config.base_url,
+          fetchImpl: this.fetchImpl,
+        });
       default:
         throw new Error(`Unknown LLM provider: ${this.config.provider}`);
     }
@@ -234,10 +249,13 @@ export class LLMRouter {
 
   private startBalanceCheck(): void {
     if (this.balanceCheckTimer) return;
+    // Balance polling is an OpenRouter feature; another OpenAI-compatible
+    // endpoint has no key-status API to ask, so there is nothing to poll.
+    if (!isOpenRouterBaseUrl(this.config.base_url)) return;
     this.balanceCheckTimer = setInterval(async () => {
       try {
-        const balance = await checkBalance(this.config.api_key);
-        if (balance.hasBalance) {
+        const balance = await checkBalance(this.config.api_key, this.config.base_url, this.fetchImpl);
+        if (balance?.hasBalance) {
           this.restoreMainModels();
         }
       } catch (err) {

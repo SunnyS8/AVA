@@ -1,9 +1,32 @@
 import OpenAI from "openai";
 import type { LLMClient, LLMMessage, LLMResponse, ToolDefinition, StreamCallback } from "../types.js";
+import { createProxyFetch } from "../proxy.js";
+
+/** Address used when the config names no other OpenAI-compatible endpoint. */
+export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 export interface OpenRouterOptions {
   apiKey: string;
   model: string;
+  /** OpenAI-compatible endpoint; defaults to OpenRouter. */
+  baseURL?: string;
+  /** Proxy address (`http://…` or `socks5://…`); absent means direct. */
+  proxy?: string;
+  /** Seam for tests; production builds its fetch from `proxy`. */
+  fetchImpl?: typeof fetch;
+}
+
+/** Resolve the endpoint address: blank falls back to OpenRouter, and trailing
+ *  slashes are dropped so joining a path never yields "//". */
+export function normalizeBaseUrl(baseURL?: string): string {
+  const trimmed = baseURL?.trim().replace(/\/+$/, "");
+  return trimmed ? trimmed : OPENROUTER_BASE_URL;
+}
+
+/** Whether the endpoint is OpenRouter itself. Its account/key endpoints exist
+ *  nowhere else, so they may only be called when this holds. */
+export function isOpenRouterBaseUrl(baseURL?: string): boolean {
+  return normalizeBaseUrl(baseURL) === OPENROUTER_BASE_URL;
 }
 
 /** Convert our LLMMessage[] to OpenAI format. */
@@ -94,9 +117,25 @@ export interface BalanceInfo {
   limit: number;
 }
 
-/** Check OpenRouter account balance via API. */
-export async function checkBalance(apiKey: string): Promise<BalanceInfo> {
-  const res = await fetch("https://openrouter.ai/api/v1/auth/key", {
+/**
+ * Check OpenRouter account balance via API.
+ *
+ * Returns null — without any request — when the configured endpoint is not
+ * OpenRouter: `/auth/key` is OpenRouter's own, and another OpenAI-compatible
+ * aggregator would answer it with a 404 at best.
+ *
+ * The key travels in the Authorization header, never the URL, and only the
+ * status code leaves this function: fetch bakes the whole URL into its own
+ * error messages.
+ */
+export async function checkBalance(
+  apiKey: string,
+  baseURL?: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<BalanceInfo | null> {
+  if (!isOpenRouterBaseUrl(baseURL)) return null;
+
+  const res = await fetchImpl(`${OPENROUTER_BASE_URL}/auth/key`, {
     headers: { Authorization: `Bearer ${apiKey}` },
     signal: AbortSignal.timeout(10_000),
   });
@@ -112,13 +151,15 @@ export async function checkBalance(apiKey: string): Promise<BalanceInfo> {
 }
 
 export function createOpenRouterClient(opts: OpenRouterOptions): LLMClient {
+  const fetchImpl = opts.fetchImpl ?? createProxyFetch(opts.proxy);
   const client = new OpenAI({
     apiKey: opts.apiKey,
-    baseURL: "https://openrouter.ai/api/v1",
+    baseURL: normalizeBaseUrl(opts.baseURL),
     defaultHeaders: {
       "HTTP-Referer": "https://github.com/Aimagine-life/betsy",
       "X-Title": "Betsy",
     },
+    ...(fetchImpl ? { fetch: fetchImpl } : {}),
   });
 
   return {
