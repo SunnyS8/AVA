@@ -11,9 +11,22 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const TOKENS_PATH = process.argv[2] ?? path.join(os.homedir(), ".betsy", "bitrix-tokens.json");
 const HANDLER = "https://83.222.26.241.sslip.io/bitrix/";
+
+// Аватарку портал принимает ТОЛЬКО при регистрации. `imbot.update` с
+// PROPERTIES.PERSONAL_PHOTO отвечает `result: true` и не делает ничего —
+// проверено 08.08.2026 тремя видами поля (пара «имя+base64», префикс
+// `data:`, чистый base64). Поэтому фотография уходит здесь, а сменить её
+// потом можно только перерегистрацией бота.
+const AVATAR_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "assets",
+  "ava-avatar.jpg",
+);
 
 let tokens;
 try {
@@ -40,6 +53,20 @@ if (typeof tokens.expiresAt === "number" && Date.now() >= tokens.expiresAt) {
   process.exit(1);
 }
 
+/** Файловое поле Битрикса — пара «имя файла + содержимое в base64».
+ *  Нет файла — регистрируем без аватарки, но говорим об этом вслух: молча
+ *  зарегистрированный безликий бот потом чинится только перерегистрацией. */
+function avatarField() {
+  try {
+    const b64 = fs.readFileSync(AVATAR_PATH).toString("base64");
+    return { PERSONAL_PHOTO: ["ava-sis.jpg", b64] };
+  } catch (err) {
+    console.warn(`внимание: аватарка не прочитана (${err.name}), регистрирую без неё: ${AVATAR_PATH}`);
+    console.warn("сменить её потом можно будет только перерегистрацией бота.");
+    return {};
+  }
+}
+
 const body = {
   // `auth` — телом запроса, не в строке адреса: адреса попадают в журналы
   // промежуточных узлов, а это живой ключ доступа.
@@ -57,6 +84,7 @@ const body = {
     NAME: "Ава",
     COLOR: "AQUA",
     WORK_POSITION: "AI-компаньон",
+    ...avatarField(),
   },
 };
 
