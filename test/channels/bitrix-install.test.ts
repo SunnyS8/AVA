@@ -95,7 +95,7 @@ describe("BitrixChannel install handling", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  function makeChannel() {
+  function makeChannel(over: { portalDomain?: string; tokenStore?: BitrixTokenStore } = {}) {
     const sent: Array<{ dialogId: string; text: string }> = [];
     const client = {
       sendMessage: async (dialogId: string, text: string) => {
@@ -106,7 +106,8 @@ describe("BitrixChannel install handling", () => {
       applicationToken: "tok",
       botId: "42",
       client: client as never,
-      tokenStore: store,
+      tokenStore: "tokenStore" in over ? over.tokenStore : store,
+      portalDomain: "portalDomain" in over ? over.portalDomain : "example.bitrix24.ru",
     });
     return { ch, sent };
   }
@@ -159,14 +160,79 @@ describe("BitrixChannel install handling", () => {
     const { ch } = makeChannel();
     ch.onMessage(async () => ({ text: "ответ" }));
 
-    const res = ch.handleWebhook(
-      installBody({ "auth[member_id]": "member-theirs", "auth[domain]": "theirs.bitrix24.ru" }),
-    );
+    // Same portal domain, different member_id — so this exercises the
+    // memberId guard itself and not the domain check standing in front of it.
+    const res = ch.handleWebhook(installBody({ "auth[member_id]": "member-theirs" }));
     expect(res.status).toBe(200);
 
     // Untouched, byte for byte: a stranger's install must not evict the
     // portal we actually serve.
     expect(store.load()).toEqual(ours);
+  });
+
+  it("refuses an install from another domain even when nothing is stored yet", () => {
+    // The memberId guard cannot help here: the store is empty. Without the
+    // domain check anyone who knows the public handler address could post
+    // their own ONAPPINSTALL first and squat the token file — every later
+    // real install would then bounce off the memberId check.
+    const { ch } = makeChannel();
+    ch.onMessage(async () => ({ text: "ответ" }));
+
+    const res = ch.handleWebhook(installBody({ "auth[domain]": "attacker.bitrix24.ru" }));
+    expect(res.status).toBe(200);
+    expect(store.load()).toBeNull();
+  });
+
+  it("matches the portal domain case-insensitively", () => {
+    const { ch } = makeChannel();
+    ch.onMessage(async () => ({ text: "ответ" }));
+    ch.handleWebhook(installBody({ "auth[domain]": "Example.Bitrix24.RU" }));
+    expect(store.load()!.accessToken).toBe(ACCESS);
+  });
+
+  it("refuses the install when the portal domain is not configured", () => {
+    // Deny by default: a forgotten setting must close the door, not leave the
+    // token file open to whoever posts first.
+    const { ch } = makeChannel({ portalDomain: undefined });
+    ch.onMessage(async () => ({ text: "ответ" }));
+
+    const res = ch.handleWebhook(installBody());
+    expect(res.status).not.toBe(200);
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(store.load()).toBeNull();
+  });
+
+  it("takes the portal domain from webhook_url on start", async () => {
+    const ch = new BitrixChannel({ applicationToken: "tok", client: {} as never, tokenStore: store });
+    ch.onMessage(async () => ({ text: "ответ" }));
+    await ch.start({
+      webhook_url: "https://example.bitrix24.ru/rest/6/secret/",
+      application_token: "tok",
+      bot_id: "42",
+    });
+
+    expect(ch.handleWebhook(installBody()).status).toBe(200);
+    expect(store.load()!.memberId).toBe("member-ours");
+  });
+
+  it("answers non-2xx when the tokens cannot be written to disk", () => {
+    // A swallowed write error would show the owner a successful install with
+    // no tokens behind it — and the portal never sends ONAPPINSTALL twice.
+    const failing = {
+      load: () => null,
+      save: () => {
+        throw Object.assign(new Error("EACCES: permission denied, open '/root/.betsy/tokens.json'"), {
+          code: "EACCES",
+        });
+      },
+      isExpired: () => false,
+    };
+    const { ch } = makeChannel({ tokenStore: failing as never });
+    ch.onMessage(async () => ({ text: "ответ" }));
+
+    const res = ch.handleWebhook(installBody());
+    expect(res.status).not.toBe(200);
+    expect(res.status).toBeGreaterThanOrEqual(400);
   });
 
   it("accepts a re-install of the same portal", () => {
@@ -185,7 +251,7 @@ describe("BitrixChannel install handling", () => {
     expect(store.load()!.accessToken).toBe(ACCESS);
   });
 
-  it("keeps neither tokens nor the application key out of the log", () => {
+  it("never lets tokens or the application key reach the log", () => {
     const spies = [
       vi.spyOn(console, "log").mockImplementation(() => {}),
       vi.spyOn(console, "warn").mockImplementation(() => {}),
@@ -196,7 +262,25 @@ describe("BitrixChannel install handling", () => {
       ch.onMessage(async () => ({ text: "ответ" }));
       ch.handleWebhook(installBody());
       ch.handleWebhook(installBody({ "auth[member_id]": "member-theirs" }));
+      ch.handleWebhook(installBody({ "auth[domain]": "attacker.bitrix24.ru" }));
       ch.handleWebhook(installBody({ "auth[refresh_token]": null }));
+
+      // Every refusal path, not just the happy one.
+      const { ch: noDomain } = makeChannel({ portalDomain: undefined });
+      noDomain.onMessage(async () => ({ text: "ответ" }));
+      noDomain.handleWebhook(installBody());
+
+      const { ch: failing } = makeChannel({
+        tokenStore: {
+          load: () => null,
+          save: () => {
+            throw Object.assign(new Error(`disk error while writing ${ACCESS}`), { code: "ENOSPC" });
+          },
+          isExpired: () => false,
+        } as never,
+      });
+      failing.onMessage(async () => ({ text: "ответ" }));
+      failing.handleWebhook(installBody());
 
       const logged = spies
         .flatMap((s) => s.mock.calls)

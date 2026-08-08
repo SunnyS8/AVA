@@ -12,10 +12,28 @@ export interface BitrixChannelOptions {
   client?: BitrixClient;
   /** Where install credentials are kept. Absent means installs are ignored. */
   tokenStore?: BitrixTokenStore;
+  /** The one portal we serve, e.g. "example.bitrix24.ru". Normally derived
+   *  from `webhook_url` in start(); an install from anywhere else is refused. */
+  portalDomain?: string;
 }
 
 /** Event name a portal sends when the application is installed. */
 const INSTALL_EVENT = "ONAPPINSTALL";
+
+/**
+ * Pulls the portal host out of a REST webhook URL.
+ *
+ * Returns undefined when the URL is absent or unparsable — and never the URL
+ * itself, in a log or an error: a webhook URL carries its secret in the path.
+ */
+function portalDomainFromWebhook(webhookUrl: string | undefined): string | undefined {
+  if (!webhookUrl) return undefined;
+  try {
+    return new URL(webhookUrl).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Bitrix24 channel.
@@ -34,12 +52,14 @@ export class BitrixChannel implements Channel {
   private applicationToken: string | undefined;
   private botId: string | undefined;
   private tokenStore: BitrixTokenStore | null;
+  private portalDomain: string | undefined;
 
   constructor(options: BitrixChannelOptions = {}) {
     this.client = options.client ?? null;
     this.applicationToken = options.applicationToken;
     this.botId = options.botId;
     this.tokenStore = options.tokenStore ?? null;
+    this.portalDomain = options.portalDomain?.toLowerCase();
   }
 
   async start(config: Record<string, string>): Promise<void> {
@@ -55,6 +75,7 @@ export class BitrixChannel implements Channel {
       // start rather than run with the guard silently disabled.
       throw new Error("BitrixChannel: bot_id is required — the anti-loop guard depends on it");
     }
+    this.portalDomain = this.portalDomain ?? portalDomainFromWebhook(config.webhook_url);
     this.client = this.client ?? new BitrixClient(config.webhook_url, this.botId);
   }
 
@@ -163,12 +184,20 @@ export class BitrixChannel implements Channel {
    *
    * An install event cannot be authenticated: `application_token` — the only
    * shared secret there is — arrives inside the very event that establishes
-   * it, so there is nothing prior to compare it against. That is tolerable on
-   * its own; a forged install can only aim OUR application at THEIR portal,
-   * which gains an attacker nothing. What it must never do is evict the
-   * credentials of the portal we already serve, so the one thing this method
-   * does check is `memberId`: write on a first install (no tokens yet) or on
-   * a re-install of the same portal, never over a different one.
+   * it, so there is nothing prior to compare it against. Nor is a forged
+   * install harmless. The handler address is public, so anyone who knows it
+   * can post an ONAPPINSTALL of their own; landing first, before the owner
+   * installs, it would both squat the token file (every later real install
+   * then bounces off the memberId check until someone deletes the file by
+   * hand) and, once the client starts calling the portal named in the store,
+   * point Ava's answers at the stranger's domain.
+   *
+   * So an install is accepted only from the ONE portal we are configured to
+   * serve, and only when it does not overwrite another portal's tokens:
+   *
+   *   1. `domain` must equal the portal domain from settings. Unknown domain
+   *      means refuse — a forgotten setting must close the door, not open it.
+   *   2. `memberId` must match whatever is already stored, if anything is.
    */
   private handleInstall(body: string): { status: number } {
     const install = parseInstallEvent(body);
@@ -184,17 +213,34 @@ export class BitrixChannel implements Channel {
       return { status: 200 };
     }
 
+    // Deny by default: without a known portal domain there is nothing to
+    // check an install against, and accepting it would hand the token file to
+    // whoever posted first. Answered non-2xx so the portal reports the
+    // install as failed instead of showing a success no one can use.
+    if (!this.portalDomain) {
+      console.error(
+        "bitrix: установка отклонена — в настройках не задан адрес портала (webhook_url). " +
+          "Укажите адрес портала и установите приложение заново.",
+      );
+      return { status: 400 };
+    }
+
+    if (install.domain.toLowerCase() !== this.portalDomain) {
+      console.warn("bitrix: install event from another portal ignored — tokens not saved");
+      return { status: 200 };
+    }
+
     const existing = store.load();
     if (existing && existing.memberId !== install.memberId) {
       console.warn("bitrix: install event from another portal ignored — existing tokens kept");
       return { status: 200 };
     }
 
-    this.saveInstall(store, install);
-    return { status: 200 };
+    return this.saveInstall(store, install) ? { status: 200 } : { status: 500 };
   }
 
-  private saveInstall(store: BitrixTokenStore, install: BitrixInstall): void {
+  /** Returns false when the tokens did not reach the disk. */
+  private saveInstall(store: BitrixTokenStore, install: BitrixInstall): boolean {
     try {
       store.save({
         accessToken: install.accessToken,
@@ -202,15 +248,20 @@ export class BitrixChannel implements Channel {
         // The portal sends a lifetime, we store a deadline: a lifetime is
         // meaningless the moment it is read back off disk.
         expiresAt: Date.now() + install.expiresIn * 1000,
-        domain: install.domain,
+        // Stored lowercased — it was matched that way, and whatever builds
+        // portal URLs from it later should not have to wonder about case.
+        domain: install.domain.toLowerCase(),
         memberId: install.memberId,
       });
       console.log("bitrix: application installed, tokens saved");
+      return true;
     } catch (err) {
-      // Only the failure kind leaves this method: the tokens we were trying
-      // to write are live credentials, and a filesystem error message can
-      // carry the path but must never carry them.
-      console.error(`bitrix: failed to save install tokens (${(err as Error).name})`);
+      // The errno code and nothing else: it names the real cause (EACCES,
+      // ENOSPC) and carries no secret, while the message around it can carry
+      // the path and `err.name` is "Error" for every filesystem failure.
+      const code = (err as NodeJS.ErrnoException).code;
+      console.error(`bitrix: failed to save install tokens (${code ?? "unknown error"})`);
+      return false;
     }
   }
 }
