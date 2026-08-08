@@ -186,7 +186,10 @@ describe("BitrixChannel media delivery", () => {
     expect(methods()).toEqual(["imbot.message.add"]);
     const said = messages(calls);
     expect(said[0]).toContain("вот кружочек");
-    expect(said[0]).toMatch(/[А-Яа-я]/);
+    // Молчаливая потеря — это то, ради чего всё затевалось: объяснение обязано
+    // быть в тексте, иначе тест зелёный и при выброшенном медиа.
+    expect(said[0]).toMatch(/не доехал|не получилось/);
+    expect(said[0]).toContain("текстом");
   });
 
   it("refuses an over-sized file in words instead of reading it into memory", async () => {
@@ -270,7 +273,8 @@ describe("BitrixChannel media delivery", () => {
 
     expect(methods()).toEqual(["imbot.message.add"]);
     expect(messages(calls)[0]).toContain("селфи");
-    expect(messages(calls)[0]).toMatch(/[А-Яа-я]/);
+    expect(messages(calls)[0]).toMatch(/не умею/);
+    expect(messages(calls)[0]).toContain("текстом");
   });
 });
 
