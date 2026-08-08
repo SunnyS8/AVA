@@ -74,15 +74,17 @@ try {
   process.exit(1);
 }
 
-if (!res.ok || data.error) {
+// `data?.` — портал может ответить и не объектом (например, null); падать
+// стеком вместо внятного сообщения тут незачем.
+if (!res.ok || data?.error) {
   // error_description умеет пересказывать присланные данные, поэтому только код.
-  console.error(`регистрация не прошла: HTTP ${res.status} ${data.error ?? ""}`);
-  if (data.error === "expired_token") {
+  console.error(`регистрация не прошла: HTTP ${res.status} ${data?.error ?? ""}`);
+  if (data?.error === "expired_token") {
     console.error("Токен истёк: перезапустите службу (systemctl restart ava) и повторите.");
   }
   process.exit(1);
 }
 
-console.log("BOT_ID =", data.result);
+console.log("BOT_ID =", data?.result);
 console.log("Впишите его в ~/.betsy/config.yaml как bitrix.bot_id и перезапустите службу:");
 console.log("  systemctl restart ava");

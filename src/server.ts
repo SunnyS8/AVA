@@ -440,6 +440,11 @@ function handleConfigGet(res: http.ServerResponse, ctx: ServerContext) {
   // it whole.
   if (safe.bitrix?.webhook_url) safe.bitrix.webhook_url = mask(safe.bitrix.webhook_url);
   if (safe.bitrix?.application_token) safe.bitrix.application_token = mask(safe.bitrix.application_token);
+  // Application keys. client_secret is a live credential: with it and a refresh
+  // token anyone can mint portal access tokens. client_id is not secret on its
+  // own, but it is half of the pair and there is no reason to hand it out.
+  if (safe.bitrix?.client_id) safe.bitrix.client_id = mask(safe.bitrix.client_id);
+  if (safe.bitrix?.client_secret) safe.bitrix.client_secret = mask(safe.bitrix.client_secret);
 
   json(res, { configured: true, ...safe });
 }
