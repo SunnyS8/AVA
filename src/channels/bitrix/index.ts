@@ -1,15 +1,21 @@
 import type { Channel, MessageHandler } from "../types.js";
 import type { OutgoingMessage } from "../../core/types.js";
-import { parseBitrixEvent } from "./event.js";
+import { parseBitrixEvent, parseInstallEvent, type BitrixInstall } from "./event.js";
 import { verifyEvent } from "./verify.js";
 import { BitrixClient } from "./client.js";
 import { DialogQueue } from "./queue.js";
+import type { BitrixTokenStore } from "./tokens.js";
 
 export interface BitrixChannelOptions {
   applicationToken?: string;
   botId?: string;
   client?: BitrixClient;
+  /** Where install credentials are kept. Absent means installs are ignored. */
+  tokenStore?: BitrixTokenStore;
 }
+
+/** Event name a portal sends when the application is installed. */
+const INSTALL_EVENT = "ONAPPINSTALL";
 
 /**
  * Bitrix24 channel.
@@ -27,11 +33,13 @@ export class BitrixChannel implements Channel {
   private client: BitrixClient | null;
   private applicationToken: string | undefined;
   private botId: string | undefined;
+  private tokenStore: BitrixTokenStore | null;
 
   constructor(options: BitrixChannelOptions = {}) {
     this.client = options.client ?? null;
     this.applicationToken = options.applicationToken;
     this.botId = options.botId;
+    this.tokenStore = options.tokenStore ?? null;
   }
 
   async start(config: Record<string, string>): Promise<void> {
@@ -82,6 +90,12 @@ export class BitrixChannel implements Channel {
   handleWebhook(body: string): { status: number } {
     const event = parseBitrixEvent(body);
     if (!event) return { status: 400 };
+
+    // Install is its own path and stops here: nothing to answer, no one to
+    // answer to, and the model has no business being woken by it. It is also
+    // handled BEFORE verifyEvent — the token an install would be verified
+    // against is the one the install itself delivers.
+    if (event.event === INSTALL_EVENT) return this.handleInstall(body);
 
     if (!verifyEvent(event, this.applicationToken)) {
       console.warn("bitrix: event rejected, token mismatch");
@@ -142,5 +156,61 @@ export class BitrixChannel implements Channel {
     });
 
     return { status: 200 };
+  }
+
+  /**
+   * Stores the credentials a portal delivers when it installs the application.
+   *
+   * An install event cannot be authenticated: `application_token` — the only
+   * shared secret there is — arrives inside the very event that establishes
+   * it, so there is nothing prior to compare it against. That is tolerable on
+   * its own; a forged install can only aim OUR application at THEIR portal,
+   * which gains an attacker nothing. What it must never do is evict the
+   * credentials of the portal we already serve, so the one thing this method
+   * does check is `memberId`: write on a first install (no tokens yet) or on
+   * a re-install of the same portal, never over a different one.
+   */
+  private handleInstall(body: string): { status: number } {
+    const install = parseInstallEvent(body);
+    if (!install) {
+      // The parser already logged which field was missing. Retrying will not
+      // conjure it up, so this is a 400 and not a "try again later".
+      return { status: 400 };
+    }
+
+    const store = this.tokenStore;
+    if (!store) {
+      console.warn("bitrix: install event received, but no token store is configured — tokens not saved");
+      return { status: 200 };
+    }
+
+    const existing = store.load();
+    if (existing && existing.memberId !== install.memberId) {
+      console.warn("bitrix: install event from another portal ignored — existing tokens kept");
+      return { status: 200 };
+    }
+
+    this.saveInstall(store, install);
+    return { status: 200 };
+  }
+
+  private saveInstall(store: BitrixTokenStore, install: BitrixInstall): void {
+    try {
+      store.save({
+        accessToken: install.accessToken,
+        refreshToken: install.refreshToken,
+        // The portal sends a lifetime, we store a deadline: a lifetime is
+        // meaningless the moment it is read back off disk.
+        expiresAt: Date.now() + install.expiresIn * 1000,
+        domain: install.domain,
+        memberId: install.memberId,
+      });
+      console.log("bitrix: application installed, tokens saved");
+    } catch (err) {
+      // Only the failure kind leaves this method: the tokens we were trying
+      // to write are live credentials, and a filesystem error message can
+      // carry the path but must never carry them.
+      console.error(`bitrix: failed to save install tokens (${(err as Error).name})`);
+    }
   }
 }
