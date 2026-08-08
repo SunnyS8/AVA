@@ -141,7 +141,8 @@ describe("refreshTokens", () => {
         access_token: "new-access-token",
         refresh_token: "new-refresh-token",
         expires_in: 3600,
-        domain: "example.bitrix24.ru",
+        domain: "oauth.bitrix.info",
+        client_endpoint: "https://example.bitrix24.ru/rest/",
         member_id: "member-789",
       }),
     );
@@ -166,7 +167,7 @@ describe("refreshTokens", () => {
         access_token: "new-access-token",
         refresh_token: "new-refresh-token",
         expires_in: 3600,
-        domain: "example.bitrix24.ru",
+        client_endpoint: "https://example.bitrix24.ru/rest/",
         member_id: "member-789",
       }),
     );
@@ -214,7 +215,7 @@ describe("refreshTokens", () => {
       jsonResponse({
         access_token: "new-access-token",
         expires_in: 3600,
-        domain: "example.bitrix24.ru",
+        client_endpoint: "https://example.bitrix24.ru/rest/",
         member_id: "member-789",
       }),
     );
@@ -232,6 +233,86 @@ describe("refreshTokens", () => {
     expect(message).not.toContain(clientSecret);
     expect(message).not.toContain(oldRefreshToken);
     expect(message).not.toContain("new-access-token");
+  });
+
+  it("takes the portal domain from client_endpoint, never from the authorisation server's own `domain`", async () => {
+    // The live answer from oauth.bitrix.info carries ITS OWN host in `domain`
+    // and the portal only in `client_endpoint`. Trusting `domain` sent every
+    // bot call to https://oauth.bitrix.info/rest/… , which answers 404
+    // ERROR_METHOD_NOT_FOUND: an hour after the install the bot went silent
+    // and the portal — where nothing was wrong — took the blame.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        access_token: "new-access-token",
+        refresh_token: "new-refresh-token",
+        expires_in: 3600,
+        domain: "oauth.bitrix.info",
+        client_endpoint: "https://p.bitrix24.ru/rest/",
+        member_id: "member-789",
+        scope: "app",
+      }),
+    );
+
+    const tokens = await refreshTokens(oldRefreshToken, clientId, clientSecret, fetchImpl);
+
+    expect(tokens.domain).toBe("p.bitrix24.ru");
+    expect(tokens.domain).not.toContain("oauth.bitrix.info");
+  });
+
+  it("throws when client_endpoint is missing, without leaking secrets", async () => {
+    // `domain` alone is not enough any more: without client_endpoint there is
+    // no way to learn the portal, and guessing would resurrect the outage.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        access_token: "new-access-token",
+        refresh_token: "new-refresh-token",
+        expires_in: 3600,
+        domain: "oauth.bitrix.info",
+        member_id: "member-789",
+      }),
+    );
+
+    let caught: Error | undefined;
+    try {
+      await refreshTokens(oldRefreshToken, clientId, clientSecret, fetchImpl);
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).toBeDefined();
+    const message = caught!.message;
+    expect(message).toContain("client_endpoint");
+    expect(message).not.toContain(clientSecret);
+    expect(message).not.toContain(oldRefreshToken);
+    expect(message).not.toContain("new-access-token");
+    expect(message).not.toContain("new-refresh-token");
+  });
+
+  it("throws when client_endpoint is not a URL, without leaking secrets", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        access_token: "new-access-token",
+        refresh_token: "new-refresh-token",
+        expires_in: 3600,
+        client_endpoint: "p.bitrix24.ru/rest/",
+        member_id: "member-789",
+      }),
+    );
+
+    let caught: Error | undefined;
+    try {
+      await refreshTokens(oldRefreshToken, clientId, clientSecret, fetchImpl);
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).toBeDefined();
+    const message = caught!.message;
+    expect(message).toContain("client_endpoint");
+    expect(message).not.toContain(clientSecret);
+    expect(message).not.toContain(oldRefreshToken);
+    expect(message).not.toContain("new-access-token");
+    expect(message).not.toContain("new-refresh-token");
   });
 
   it("throws when fetch itself fails, without leaking secrets", async () => {

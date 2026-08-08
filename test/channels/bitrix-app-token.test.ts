@@ -251,4 +251,47 @@ describe("token refresh and the application token", () => {
     expect(current().accessToken).toBe("new-access");
     expect(current().applicationToken).toBe(APP_TOKEN);
   });
+
+  it("keeps the portal domain of the current tokens, whatever the refresh returns", async () => {
+    // Second line of defence behind refreshTokens. The authorisation server
+    // answers with its OWN host in `domain`; a refresh implementation that
+    // passes that through once redirected every bot call to
+    // https://oauth.bitrix.info/rest/… (404 ERROR_METHOD_NOT_FOUND) and the
+    // bot went quiet an hour after the install. The client knows its portal —
+    // nothing in a refresh answer may replace it.
+    const { source, current } = memoryStore({
+      accessToken: "old-access",
+      refreshToken: "old-refresh",
+      expiresAt: Date.now() - 1000,
+      domain: "example.bitrix24.ru",
+      memberId: "member-ours",
+      applicationToken: APP_TOKEN,
+    });
+
+    const calledUrls: string[] = [];
+    const client = new BitrixClient({
+      tokens: source,
+      botId: "42",
+      clientId: "local.0123456789abcdef",
+      clientSecret: "client-secret-placeholder",
+      fetchImpl: async (input: RequestInfo | URL) => {
+        calledUrls.push(String(input));
+        return new Response(JSON.stringify({ result: {} }), { status: 200 });
+      },
+      refreshImpl: async () => ({
+        accessToken: "new-access",
+        refreshToken: "new-refresh",
+        expiresAt: Date.now() + 3600_000,
+        domain: "oauth.bitrix.info",
+        memberId: "member-ours",
+      }),
+    });
+
+    await client.sendMessage("chat42", "привет");
+
+    expect(current().domain).toBe("example.bitrix24.ru");
+    expect(current().applicationToken).toBe(APP_TOKEN);
+    expect(calledUrls).toEqual(["https://example.bitrix24.ru/rest/imbot.message.add.json"]);
+    for (const url of calledUrls) expect(url).not.toContain("oauth.bitrix.info");
+  });
 });

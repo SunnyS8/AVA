@@ -125,12 +125,27 @@ export class BitrixClient {
       throw new Error(`Bitrix token refresh failed: ${(err as Error).name}`);
     }
 
-    // The portal does not return `application_token` on refresh — it is issued
-    // once, at install. Saving the fresh pair as-is would therefore drop it an
-    // hour after the install, and from then on every incoming event fails
-    // verification: a break that looks like "it worked and then stopped by
-    // itself". Carry it over explicitly.
-    const merged: BitrixTokens = { ...fresh, applicationToken: tokens.applicationToken };
+    // Two things a refresh must never change, both carried over explicitly:
+    //
+    // `domain` — the portal we are installed in. The refresh answer comes from
+    // the authorisation server (oauth.bitrix.info), and its `domain` field
+    // names ITSELF, not the portal; only `client_endpoint` names the portal.
+    // That already cost an outage: the value was taken from `domain`, and an
+    // hour after the install every bot call went to
+    // https://oauth.bitrix.info/rest/… → 404 ERROR_METHOD_NOT_FOUND, i.e. the
+    // bot silently stopped answering. tokens.ts reads the right field now;
+    // this is the second line of defence. The client knows which portal it
+    // serves — no refresh answer, and no other refreshImpl, may move it.
+    //
+    // `applicationToken` — issued once, at install, and never returned by a
+    // refresh. Saving the fresh pair as-is would drop it an hour in, and from
+    // then on every incoming event fails verification: another break that
+    // looks like "it worked and then stopped by itself".
+    const merged: BitrixTokens = {
+      ...fresh,
+      domain: tokens.domain,
+      applicationToken: tokens.applicationToken,
+    };
 
     // A pair that never reaches the disk is a pair the next start does not
     // have: the old refresh token is already spent, so a silent failure here
