@@ -155,18 +155,50 @@ interface BitrixOAuthResponse {
   access_token?: string;
   refresh_token?: string;
   expires_in?: number;
+  /**
+   * The authorisation server's OWN host ("oauth.bitrix.info") — NOT the
+   * portal. Kept here only so the shape matches the wire and nobody
+   * "restores" it as the portal domain. Read `client_endpoint` instead.
+   */
   domain?: string;
+  /** Portal REST root, e.g. "https://example.bitrix24.ru/rest/" — the only
+   *  field in this response that names the portal. */
+  client_endpoint?: string;
   member_id?: string;
   error?: string;
 }
 
-/** Non-error fields a successful response must carry. */
+/** Non-error fields a successful response must carry. `client_endpoint` is
+ *  checked separately: it must also parse as a URL to be of any use. */
 const REQUIRED_OAUTH_STRING_FIELDS: (keyof BitrixOAuthResponse)[] = [
   "access_token",
   "refresh_token",
-  "domain",
   "member_id",
 ];
+
+/**
+ * Portal host out of `client_endpoint` ("https://example.bitrix24.ru/rest/" →
+ * "example.bitrix24.ru"), or undefined when the value is absent or is not a
+ * URL with a host.
+ *
+ * This is the ONLY place the portal domain comes from on a refresh. The
+ * response's own `domain` field carries "oauth.bitrix.info" — the
+ * authorisation server naming itself — and trusting it once sent every bot
+ * call to https://oauth.bitrix.info/rest/… , where Bitrix answers 404
+ * ERROR_METHOD_NOT_FOUND. In production the bot fell silent an hour after
+ * the install (at the first refresh) and the symptom read as "the portal
+ * revoked our rights", which it had not.
+ */
+function portalDomainFromEndpoint(clientEndpoint: string | undefined): string | undefined {
+  if (typeof clientEndpoint !== "string" || clientEndpoint === "") return undefined;
+  let url: URL;
+  try {
+    url = new URL(clientEndpoint);
+  } catch {
+    return undefined;
+  }
+  return url.hostname === "" ? undefined : url.hostname;
+}
 
 /**
  * Finds the first required field missing from an otherwise-successful
@@ -179,6 +211,11 @@ function findMissingOAuthField(data: BitrixOAuthResponse): string | undefined {
   for (const field of REQUIRED_OAUTH_STRING_FIELDS) {
     if (typeof data[field] !== "string" || data[field] === "") return field;
   }
+  // Unusable and missing are the same failure here: without a portal host
+  // there is nowhere to send the next request, and there is no second field
+  // to fall back to. Reported as a plain missing-field name — the response
+  // body stays out of the message, it still holds live tokens.
+  if (portalDomainFromEndpoint(data.client_endpoint) === undefined) return "client_endpoint";
   // expires_in arrives as JSON so it's normally already a number; Number()
   // is a deliberate, explicit coercion (not relying on `+`/implicit JS
   // coercion) to also accept a numeric string without accepting garbage.
@@ -247,7 +284,10 @@ export async function refreshTokens(
     accessToken: data.access_token as string,
     refreshToken: data.refresh_token as string,
     expiresAt: Date.now() + Number(data.expires_in) * 1000,
-    domain: data.domain as string,
+    // From client_endpoint, never from data.domain — see
+    // portalDomainFromEndpoint. findMissingOAuthField has already proven this
+    // parses, so the cast is safe.
+    domain: portalDomainFromEndpoint(data.client_endpoint) as string,
     memberId: data.member_id as string,
   };
 }
