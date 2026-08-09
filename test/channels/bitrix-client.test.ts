@@ -252,3 +252,79 @@ describe("BitrixClient", () => {
     expect(out).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
   });
 });
+
+/** One MP4 box: 4-byte size, 4-byte type, payload. */
+function mp4Box(type: string, payload: Buffer): Buffer {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(payload.length + 8, 0);
+  head.write(type, 4, "latin1");
+  return Buffer.concat([head, payload]);
+}
+
+/** A movie laid out the way fal.ai returns one: the index last. */
+function moovLastMovie(): Buffer {
+  const stcoBody = Buffer.alloc(12);
+  stcoBody.writeUInt32BE(1, 4);
+  stcoBody.writeUInt32BE(32, 8);
+  const moov = mp4Box("moov", mp4Box("trak", mp4Box("mdia", mp4Box("minf", mp4Box("stbl", mp4Box("stco", stcoBody))))));
+  return Buffer.concat([
+    mp4Box("ftyp", Buffer.from("isomiso2avc1mp41", "latin1")),
+    mp4Box("mdat", Buffer.from("media-payload")),
+    moov,
+  ]);
+}
+
+/** The four answers sendFile needs, in the order it asks for them. */
+function fileUploadFetch() {
+  return vi
+    .fn()
+    .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ result: { id: 7 } }) })
+    .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ result: { ID: 55 } }) })
+    .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ result: { ID: 900 } }) })
+    .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ result: true }) });
+}
+
+/** The base64 payload of the upload call, decoded. */
+function uploadedBytes(fetchMock: ReturnType<typeof vi.fn>): Buffer {
+  const call = fetchMock.mock.calls.find(([url]) => String(url).includes("disk.folder.uploadfile"));
+  const body = JSON.parse((call![1] as { body: string }).body) as { fileContent: [string, string] };
+  return Buffer.from(body.fileContent[1], "base64");
+}
+
+describe("BitrixClient.sendFile", () => {
+  it("uploads the video with its index moved to the front", async () => {
+    const fetchMock = fileUploadFetch();
+    const { client } = makeClient(fetchMock);
+
+    await client.sendFile("6", { name: "krug.mp4", bytes: moovLastMovie() }, "готово");
+
+    const sent = uploadedBytes(fetchMock);
+    expect(sent.toString("latin1", 4, 8)).toBe("ftyp");
+    // moov must now precede mdat: the portal makes no preview for a video, so
+    // the chat plays the file itself and needs the index up front.
+    expect(sent.indexOf("moov")).toBeLessThan(sent.indexOf("mdat"));
+    expect(sent.length).toBe(moovLastMovie().length);
+  });
+
+  it("leaves a file that is not a moov-last MP4 exactly as it was", async () => {
+    const fetchMock = fileUploadFetch();
+    const { client } = makeClient(fetchMock);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 9, 9]);
+
+    await client.sendFile("6", { name: "selfie.png", bytes: png }, "вот");
+
+    expect(uploadedBytes(fetchMock).equals(png)).toBe(true);
+  });
+
+  it("sends the answer text together with the file", async () => {
+    const fetchMock = fileUploadFetch();
+    const { client } = makeClient(fetchMock);
+
+    await client.sendFile("6", { name: "krug.mp4", bytes: moovLastMovie() }, "готово");
+
+    const commit = fetchMock.mock.calls.find(([url]) => String(url).includes("im.disk.file.commit"));
+    const body = JSON.parse((commit![1] as { body: string }).body) as { MESSAGE: string; DISK_ID: number };
+    expect(body.MESSAGE).toBe("готово");
+    expect(body.DISK_ID).toBe(900);
+  });
+});
