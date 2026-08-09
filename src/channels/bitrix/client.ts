@@ -1,5 +1,6 @@
 import { refreshTokens, type BitrixTokens } from "./tokens.js";
 import type { MediaPayload } from "./media.js";
+import { faststart } from "./mp4.js";
 
 export const MAX_MESSAGE_LEN = 8000;
 
@@ -121,6 +122,14 @@ export class BitrixClient {
   async sendFile(dialogId: string, file: MediaPayload, text: string): Promise<void> {
     const chatId = await this.resolveChatId(dialogId);
 
+    // The portal makes no preview for a video (measured 09.08.2026: it does for
+    // an image, never for a video, whatever method or parameters the upload
+    // uses), so the chat falls back to playing the file itself. Handing it a
+    // movie whose index sits at the end means the player has nothing to show
+    // until the whole file is down — see mp4.ts. Anything that is not a
+    // moov-last MP4 comes back from faststart() untouched.
+    const bytes = faststart(file.bytes);
+
     const folderId = pickId("im.disk.folder.get", await this.call("im.disk.folder.get", { CHAT_ID: chatId }));
 
     // `disk` scope lives here: without it the portal answers HTTP 401
@@ -132,7 +141,7 @@ export class BitrixClient {
         id: folderId,
         data: { NAME: file.name },
         // The file-field shape Bitrix expects everywhere: name and base64.
-        fileContent: [file.name, file.bytes.toString("base64")],
+        fileContent: [file.name, bytes.toString("base64")],
         // Two videos in a row are both "krug.mp4"; let the portal keep both.
         generateUniqueName: "Y",
       }),
