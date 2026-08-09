@@ -205,7 +205,7 @@ async function main() {
         const bitrixChannel = new BitrixChannel({ tokenStore });
         bitrixChannel.onMessage(
           buildBitrixHandler({
-            ask: async (msg, _profile, access) => {
+            ask: async (msg, profile, access) => {
               if (!engine) return { text: "Я сейчас не могу ответить — модель не подключена." };
               // Same order as the Telegram wiring below: the scheduler must know
               // where to answer before the engine starts thinking. Keyed by
@@ -213,7 +213,10 @@ async function main() {
               // different dialogs in parallel) don't clobber each other's
               // context — see the Map in SchedulerService.
               scheduler.setMessageContext(msg.userId, msg.channelName, msg.userId, engine.getHistory(msg.userId) ?? []);
-              return engine.process(msg, undefined, access);
+              // Права на платную генерацию — из профиля: видео стоит около двух
+              // долларов за ролик, поэтому решает поимённый список
+              // (profiles.video_ids / voice_ids), а не общий уровень доступа.
+              return engine.process(msg, undefined, access, { video: profile.video, voice: profile.voice });
             },
             profiles: config.profiles,
             limiter,
