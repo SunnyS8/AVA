@@ -171,8 +171,11 @@ describe("generateLipSync — queue flow", () => {
 
     const urls = mockFetch.mock.calls.map((call) => String(call[0]));
     expect(urls[0]).toBe(`https://queue.fal.run/${OMNIHUMAN}`);
-    expect(urls.some((u) => u === `https://queue.fal.run/${OMNIHUMAN}/requests/req-1/status`)).toBe(true);
-    expect(urls.some((u) => u === `https://queue.fal.run/${OMNIHUMAN}/requests/req-1`)).toBe(true);
+    // Статус и результат — по «владелец/приложение», а не по полному пути
+    // модели. Полный путь даёт 405: замер в бою 09.08.2026.
+    const ns = OMNIHUMAN.split("/").slice(0, 2).join("/");
+    expect(urls.some((u) => u === `https://queue.fal.run/${ns}/requests/req-1/status`)).toBe(true);
+    expect(urls.some((u) => u === `https://queue.fal.run/${ns}/requests/req-1`)).toBe(true);
     expect(urls.at(-1)).toBe("https://fal.media/circle.mp4");
     expect(result?.length).toBe(4);
   });
@@ -257,5 +260,18 @@ describe("generateLipSync — honest failure", () => {
 
     expect(result).toBeNull();
     expect(errors.join("\n")).toContain(OMNIHUMAN);
+  });
+});
+
+describe("Адрес опроса задачи в очереди fal", () => {
+  it("берёт первые два сегмента пути модели, а не весь путь", async () => {
+    // Замер в бою 09.08.2026: задачу принимают по полному пути модели, а
+    // статус отдают только по «владелец/приложение». Для fal-ai/sadtalker это
+    // одно и то же, поэтому раньше не всплывало; с fal-ai/bytedance/omnihuman
+    // опрос получил 405 — и кружочек падал уже ПОСЛЕ оплаты генерации.
+    const { queueNamespace } = await import("../../src/channels/telegram/video.js");
+    expect(queueNamespace("fal-ai/bytedance/omnihuman")).toBe("fal-ai/bytedance");
+    expect(queueNamespace("fal-ai/kling-video/ai-avatar/v2/standard")).toBe("fal-ai/kling-video");
+    expect(queueNamespace("fal-ai/sadtalker")).toBe("fal-ai/sadtalker");
   });
 });

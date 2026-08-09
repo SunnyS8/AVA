@@ -39,6 +39,19 @@ export const LIPSYNC_FIELDS = {
 } as const;
 
 const FAL_QUEUE_BASE = "https://queue.fal.run";
+
+/**
+ * Where to ask about a queued job.
+ *
+ * fal.ai takes the submission at the FULL model path, but serves job status and
+ * result under the first two segments only — the owner and the app. With
+ * `fal-ai/sadtalker` the two coincide, so this never surfaced; the moment the
+ * model became `fal-ai/bytedance/omnihuman` the status URL turned into a 405
+ * and every circle failed after being paid for. Измерено в бою 09.08.2026.
+ */
+export function queueNamespace(model: string): string {
+  return model.split("/").slice(0, 2).join("/");
+}
 const POLL_INTERVAL_MS = 5000;
 const POLL_TIMEOUT_MS = 9 * 60_000; // sync fal endpoints time out at ~5 min, the queue does not
 
@@ -145,7 +158,7 @@ export async function generateLipSync(
       return null;
     }
 
-    const requestUrl = `${FAL_QUEUE_BASE}/${model}/requests/${requestId}`;
+    const requestUrl = `${FAL_QUEUE_BASE}/${queueNamespace(model)}/requests/${requestId}`;
 
     // Poll for completion
     const deadline = Date.now() + POLL_TIMEOUT_MS;
