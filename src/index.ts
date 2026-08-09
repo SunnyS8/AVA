@@ -216,7 +216,13 @@ async function main() {
               // Права на платную генерацию — из профиля: видео стоит около двух
               // долларов за ролик, поэтому решает поимённый список
               // (profiles.video_ids / voice_ids), а не общий уровень доступа.
-              return engine.process(msg, undefined, access, { video: profile.video, voice: profile.voice });
+              // Видео в Битриксе выключено намеренно. Замеры 09.08: портал
+              // показывает видео от бота только карточкой файла — проигрывателя
+              // в ленте нет ни при каких параметрах (перебраны 12+ способов,
+              // включая недокументированный im.disk.record.share). Платить
+              // ~$2 за ролик, который неудобно смотреть, незачем: кружочки
+              // остаются в Телеграме, где формат родной.
+              return engine.process(msg, undefined, access, { video: false, voice: profile.voice });
             },
             profiles: config.profiles,
             limiter,
